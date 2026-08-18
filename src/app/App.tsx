@@ -39,7 +39,7 @@ interface Professor { id: number; id_usuario: number; nome_completo: string; ema
 interface Aluno { id: number; id_usuario: number | null; nome: string; email: string; telefone: string; ra: string; situacao: string; }
 interface Paciente { id: number; cod_prontuario: string; local_fisico: string; nome_completo: string; data_nascimento: string; cpf: string; situacao: string; }
 interface Responsavel { id: number; nome_completo: string; cpf: string; whatsapp: string; situacao: string; }
-interface ResponsavelPaciente { id: number; id_responsavel: number; id_paciente: number; grau_parentesco: string; observacoes: string; }
+interface ResponsavelPaciente { id: number; id_responsavel: number; id_paciente: number; grau_parentesco: string; observacoes?: string; }
 interface Grupo { id: number; grupo: string; situacao: string; }
 interface Periodo { id: number; periodo: string; data_inicial: string; data_final: string; situacao: string; }
 interface Clinica { id: number; clinica: string; situacao: string; }
@@ -278,10 +278,10 @@ function Btn({
 }
 
 function Input({
-  label, value, onChange, placeholder, type = "text", required = false,
+  label, value, onChange, placeholder, type = "text", required = false, error,
 }: {
   label: string; value: string; onChange: (v: string) => void; placeholder?: string;
-  type?: string; required?: boolean;
+  type?: string; required?: boolean; error?: string;
 }) {
   return (
     <div className="flex flex-col gap-1">
@@ -294,17 +294,18 @@ function Input({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         required={required}
-        className="border border-border rounded px-3 py-1.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition"
+        className={`border ${error ? "border-red-500 focus:ring-red-500/30 focus:border-red-500" : "border-border focus:ring-primary/30 focus:border-primary"} rounded px-3 py-1.5 text-sm bg-input-background focus:outline-none focus:ring-2 transition`}
       />
+      {error && <span className="text-xs text-red-500">{error}</span>}
     </div>
   );
 }
 
 function Select({
-  label, value, onChange, options, required = false,
+  label, value, onChange, options, required = false, error,
 }: {
   label: string; value: string; onChange: (v: string) => void;
-  options: { value: string; label: string }[]; required?: boolean;
+  options: { value: string; label: string }[]; required?: boolean; error?: string;
 }) {
   return (
     <div className="flex flex-col gap-1">
@@ -315,13 +316,14 @@ function Select({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         required={required}
-        className="border border-border rounded px-3 py-1.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition"
+        className={`border ${error ? "border-red-500 focus:ring-red-500/30 focus:border-red-500" : "border-border focus:ring-primary/30 focus:border-primary"} rounded px-3 py-1.5 text-sm bg-input-background focus:outline-none focus:ring-2 transition`}
       >
         <option value="">Selecione...</option>
         {options.map((o) => (
           <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
+      {error && <span className="text-xs text-red-500">{error}</span>}
     </div>
   );
 }
@@ -1262,7 +1264,11 @@ function ProfessoresPage({ onNav, showToast }: {
   );
 }
 
-function ProfessorDetalhePage({ id, onBack, onNav }: { id: number; onBack: () => void; onNav: (p: Page, id?: number) => void }) {
+function ProfessorDetalhePage({ id, onBack, onNav, showToast }: {
+  id: number; onBack: () => void;
+  onNav: (p: Page, id?: number) => void;
+  showToast?: (m: string, t?: "success" | "error") => void;
+}) {
   const prof = DB.professores.find((p) => p.id === id);
   if (!prof) return <div>Professor não encontrado.</div>;
 
@@ -1361,63 +1367,291 @@ function AlunosPage({ onNav, showToast }: {
   onNav: (p: Page, id?: number) => void;
   showToast: (m: string, t?: "success" | "error") => void;
 }) {
+  const [alunosList, setAlunosList] = useState<Aluno[]>(() => [...DB.alunos]);
   const [search, setSearch] = useState("");
   const [filterSit, setFilterSit] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [editingAluno, setEditingAluno] = useState<Aluno | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
-  const filtered = DB.alunos.filter((a) => {
-    const s = search.toLowerCase();
-    const matchSearch = !s || a.nome.toLowerCase().includes(s) || a.ra.includes(s) || a.email.toLowerCase().includes(s);
-    const matchSit = !filterSit || a.situacao === filterSit;
-    return matchSearch && matchSit;
-  });
+  const initialFormState = {
+    nome: "",
+    ra: "",
+    email: "",
+    telefone: "",
+    id_usuario: "",
+    situacao: "ATIVO",
+    id_grupo: "",
+    id_periodo_letivo: "3", // default to current active period
+  };
+
+  const [formData, setFormData] = useState(initialFormState);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const enrichedAlunos = useMemo(() => {
+    return alunosList.map((a) => {
+      const mat = DB.matriculas.find((m) => m.id_aluno === a.id && m.situacao === "ATIVA");
+      const grupo = mat ? DB.grupos.find((g) => g.id === mat.id_grupo) : null;
+      const periodo = mat ? DB.periodos.find((p) => p.id === mat.id_periodo_letivo) : null;
+      const user = a.id_usuario ? DB.usuarios.find((u) => u.id === a.id_usuario) : null;
+      return { ...a, mat, grupo, periodo, user };
+    });
+  }, [alunosList]);
+
+  const filtered = useMemo(() => {
+    return enrichedAlunos.filter((a) => {
+      const s = search.toLowerCase().trim();
+      const matchSearch =
+        !s ||
+        a.nome.toLowerCase().includes(s) ||
+        a.ra.toLowerCase().includes(s) ||
+        a.email.toLowerCase().includes(s) ||
+        (a.grupo && a.grupo.grupo.toLowerCase().includes(s));
+      const matchSit = !filterSit || a.situacao === filterSit;
+      return matchSearch && matchSit;
+    });
+  }, [enrichedAlunos, search, filterSit]);
+
+  const handleOpenCreateModal = () => {
+    const maxRaNum = DB.alunos.reduce((max, a) => {
+      const num = parseInt(a.ra, 10);
+      return isNaN(num) ? max : Math.max(max, num);
+    }, 2026005);
+    const nextRa = String(maxRaNum + 1);
+
+    setFormData({
+      nome: "",
+      ra: nextRa,
+      email: "",
+      telefone: "",
+      id_usuario: "",
+      situacao: "ATIVO",
+      id_grupo: "",
+      id_periodo_letivo: "3",
+    });
+    setFormErrors({});
+    setEditingAluno(null);
+    setShowModal(true);
+  };
+
+  const handleOpenEditModal = (aluno: Aluno) => {
+    const mat = DB.matriculas.find((m) => m.id_aluno === aluno.id && m.situacao === "ATIVA");
+    setFormData({
+      nome: aluno.nome,
+      ra: aluno.ra,
+      email: aluno.email,
+      telefone: aluno.telefone,
+      id_usuario: aluno.id_usuario ? String(aluno.id_usuario) : "",
+      situacao: aluno.situacao,
+      id_grupo: mat ? String(mat.id_grupo) : "",
+      id_periodo_letivo: mat ? String(mat.id_periodo_letivo) : "3",
+    });
+    setFormErrors({});
+    setEditingAluno(aluno);
+    setShowModal(true);
+  };
+
+  const handleSave = () => {
+    const errors: Record<string, string> = {};
+    if (!formData.nome.trim()) errors.nome = "Informe o nome completo";
+    if (!formData.ra.trim()) errors.ra = "Informe o RA do aluno";
+    if (!formData.email.trim()) errors.email = "Informe o e-mail institucional";
+
+    const duplicateRa = DB.alunos.find(
+      (a) => a.ra.toLowerCase() === formData.ra.trim().toLowerCase() && (!editingAluno || a.id !== editingAluno.id)
+    );
+    if (duplicateRa) {
+      errors.ra = "Este RA já pertence a outro aluno";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      showToast("Preencha todos os campos obrigatórios corretamente.", "error");
+      return;
+    }
+
+    if (editingAluno) {
+      // Update
+      const idx = DB.alunos.findIndex((a) => a.id === editingAluno.id);
+      if (idx !== -1) {
+        DB.alunos[idx] = {
+          ...DB.alunos[idx],
+          nome: formData.nome.trim(),
+          ra: formData.ra.trim(),
+          email: formData.email.trim(),
+          telefone: formData.telefone.trim(),
+          id_usuario: formData.id_usuario ? Number(formData.id_usuario) : null,
+          situacao: formData.situacao,
+        };
+      }
+
+      // Update active matricula
+      if (formData.id_grupo && formData.id_periodo_letivo) {
+        const matIdx = DB.matriculas.findIndex((m) => m.id_aluno === editingAluno.id && m.situacao === "ATIVA");
+        if (matIdx !== -1) {
+          DB.matriculas[matIdx].id_grupo = Number(formData.id_grupo);
+          DB.matriculas[matIdx].id_periodo_letivo = Number(formData.id_periodo_letivo);
+        } else {
+          const nextMatId = DB.matriculas.reduce((m, mat) => Math.max(m, mat.id), 0) + 1;
+          DB.matriculas.unshift({
+            id: nextMatId,
+            id_aluno: editingAluno.id,
+            id_grupo: Number(formData.id_grupo),
+            id_periodo_letivo: Number(formData.id_periodo_letivo),
+            data_matricula_inicio: new Date().toISOString().split("T")[0],
+            data_matricula_final: "2025-06-30",
+            situacao: "ATIVA",
+          });
+        }
+      }
+
+      setAlunosList([...DB.alunos]);
+      setShowModal(false);
+      setEditingAluno(null);
+      showToast("Aluno atualizado com sucesso!");
+    } else {
+      // Create new
+      const nextId = DB.alunos.reduce((m, a) => Math.max(m, a.id), 0) + 1;
+      const newAluno: Aluno = {
+        id: nextId,
+        id_usuario: formData.id_usuario ? Number(formData.id_usuario) : null,
+        nome: formData.nome.trim(),
+        email: formData.email.trim(),
+        telefone: formData.telefone.trim(),
+        ra: formData.ra.trim(),
+        situacao: formData.situacao || "ATIVO",
+      };
+
+      DB.alunos.unshift(newAluno);
+
+      // Create matricula if group provided
+      if (formData.id_grupo && formData.id_periodo_letivo) {
+        const nextMatId = DB.matriculas.reduce((m, mat) => Math.max(m, mat.id), 0) + 1;
+        DB.matriculas.unshift({
+          id: nextMatId,
+          id_aluno: nextId,
+          id_grupo: Number(formData.id_grupo),
+          id_periodo_letivo: Number(formData.id_periodo_letivo),
+          data_matricula_inicio: new Date().toISOString().split("T")[0],
+          data_matricula_final: "2025-06-30",
+          situacao: "ATIVA",
+        });
+      }
+
+      setAlunosList([...DB.alunos]);
+      setShowModal(false);
+      showToast("Aluno cadastrado com sucesso!");
+    }
+  };
+
+  const handleDelete = (id: number) => {
+    const idx = DB.alunos.findIndex((a) => a.id === id);
+    if (idx !== -1) {
+      DB.alunos.splice(idx, 1);
+      // Remove matriculas
+      const matIndices = DB.matriculas.map((m, i) => (m.id_aluno === id ? i : -1)).filter((i) => i !== -1);
+      for (let i = matIndices.length - 1; i >= 0; i--) {
+        DB.matriculas.splice(matIndices[i], 1);
+      }
+      setAlunosList([...DB.alunos]);
+      setConfirmDeleteId(null);
+      showToast("Aluno excluído com sucesso.");
+    }
+  };
+
+  // Preview selections
+  const previewUser = DB.usuarios.find((u) => String(u.id) === formData.id_usuario);
+  const previewGrupo = DB.grupos.find((g) => String(g.id) === formData.id_grupo);
+  const previewPeriodo = DB.periodos.find((p) => String(p.id) === formData.id_periodo_letivo);
 
   return (
     <div>
       <Breadcrumb items={[{ label: "Gestão Acadêmica" }, { label: "Alunos" }]} />
       <PageHeader
         title="Alunos"
-        sub={`${DB.alunos.length} alunos cadastrados`}
-        action={<Btn icon={<Plus size={14} />} onClick={() => setShowModal(true)}>Novo Aluno</Btn>}
+        sub={`${alunosList.length} alunos cadastrados`}
+        action={<Btn icon={<Plus size={14} />} onClick={handleOpenCreateModal}>Novo Aluno</Btn>}
       />
+
       <Card>
-        <div className="flex flex-wrap gap-2 p-3 border-b border-border">
-          <SearchBar value={search} onChange={setSearch} placeholder="Buscar por nome ou RA..." />
-          <select
-            value={filterSit}
-            onChange={(e) => setFilterSit(e.target.value)}
-            className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
-          >
-            <option value="">Todas as situações</option>
-            <option value="ATIVO">Ativo</option>
-            <option value="INATIVO">Inativo</option>
-          </select>
+        <div className="flex flex-wrap gap-2 p-3 border-b border-border items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center">
+            <SearchBar value={search} onChange={setSearch} placeholder="Buscar por nome, RA ou grupo..." />
+            <select
+              value={filterSit}
+              onChange={(e) => setFilterSit(e.target.value)}
+              className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Todas as situações</option>
+              <option value="ATIVO">Ativo</option>
+              <option value="INATIVO">Inativo</option>
+            </select>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            Exibindo {filtered.length} de {alunosList.length} alunos
+          </span>
         </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/30">
-                {["Nome", "RA", "E-mail", "Telefone", "Situação", "Ações"].map((h) => (
+                {["Nome", "RA", "E-mail", "Telefone", "Grupo Atual", "Situação", "Ações"].map((h) => (
                   <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {filtered.length === 0 && <tr><td colSpan={6}><EmptyState /></td></tr>}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={7}>
+                    <EmptyState message="Nenhum aluno encontrado." />
+                  </td>
+                </tr>
+              )}
               {filtered.map((a) => (
-                <tr key={a.id} className="hover:bg-accent/40 transition">
-                  <td className="px-4 py-3 font-medium">{a.nome}</td>
+                <tr key={a.id} className="hover:bg-accent/40 transition cursor-pointer" onClick={() => onNav("aluno-detalhe", a.id)}>
+                  <td className="px-4 py-3 font-medium text-foreground">
+                    <div className="font-semibold">{a.nome}</div>
+                    {a.user && (
+                      <div className="text-[11px] text-muted-foreground">Usuário: {a.user.email}</div>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-muted-foreground font-mono text-xs">{a.ra}</td>
                   <td className="px-4 py-3 text-muted-foreground">{a.email}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{a.telefone}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{a.telefone || "—"}</td>
+                  <td className="px-4 py-3 text-muted-foreground">
+                    {a.grupo ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-secondary text-secondary-foreground">
+                        {a.grupo.grupo} ({a.periodo?.periodo ?? "—"})
+                      </span>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
                   <td className="px-4 py-3"><Badge label={a.situacao} /></td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-1">
-                      <button className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-primary" onClick={() => onNav("aluno-detalhe", a.id)}>
-                        <Eye size={13} />
+                      <button
+                        className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-primary"
+                        onClick={() => onNav("aluno-detalhe", a.id)}
+                        title="Ver detalhes"
+                      >
+                        <Eye size={14} />
                       </button>
-                      <button className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground">
-                        <Edit2 size={13} />
+                      <button
+                        className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"
+                        onClick={() => handleOpenEditModal(a)}
+                        title="Editar"
+                      >
+                        <Edit2 size={14} />
+                      </button>
+                      <button
+                        className="p-1 hover:bg-red-50 rounded transition text-muted-foreground hover:text-red-600"
+                        onClick={() => setConfirmDeleteId(a.id)}
+                        title="Excluir"
+                      >
+                        <Trash2 size={14} />
                       </button>
                     </div>
                   </td>
@@ -1428,33 +1662,206 @@ function AlunosPage({ onNav, showToast }: {
         </div>
       </Card>
 
+      {/* MODAL NOVO / EDITAR ALUNO */}
       <Modal
         open={showModal}
-        title="Novo Aluno"
-        onClose={() => setShowModal(false)}
+        title={editingAluno ? `Editar Aluno #${editingAluno.id}` : "Novo Aluno"}
+        onClose={() => { setShowModal(false); setEditingAluno(null); }}
         footer={
           <>
-            <Btn variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Btn>
-            <Btn onClick={() => { setShowModal(false); showToast("Aluno cadastrado com sucesso!"); }}>Salvar</Btn>
+            <Btn variant="secondary" onClick={() => { setShowModal(false); setEditingAluno(null); }}>
+              Cancelar
+            </Btn>
+            <Btn onClick={handleSave}>
+              {editingAluno ? "Atualizar" : "Salvar"}
+            </Btn>
           </>
         }
       >
-        <div className="flex flex-col gap-3">
-          <Input label="Nome" value="" onChange={() => { }} placeholder="Nome completo" required />
-          <Input label="RA" value="" onChange={() => { }} placeholder="Ex: 2026006" required />
-          <Input label="E-mail" value="" onChange={() => { }} type="email" required />
-          <Input label="Telefone" value="" onChange={() => { }} placeholder="(00) 00000-0000" />
-          <Select label="Usuário vinculado" value="" onChange={() => { }}
-            options={DB.usuarios.filter((u) => u.perfil === "ALUNO").map((u) => ({ value: String(u.id), label: u.nome }))} />
-          <Select label="Situação" value="" onChange={() => { }}
-            options={[{ value: "ATIVO", label: "Ativo" }, { value: "INATIVO", label: "Inativo" }]} />
+        <div className="flex flex-col gap-3.5">
+          {/* NOME COMPLETO */}
+          <Input
+            label="Nome Completo"
+            value={formData.nome}
+            error={formErrors.nome}
+            onChange={(val) => {
+              setFormData((prev) => ({ ...prev, nome: val }));
+              if (formErrors.nome) setFormErrors((prev) => ({ ...prev, nome: "" }));
+            }}
+            placeholder="Ex: Ana Carolina Souza"
+            required
+          />
+
+          {/* RA & SITUAÇÃO */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input
+              label="RA (Registro Acadêmico)"
+              value={formData.ra}
+              error={formErrors.ra}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, ra: val }));
+                if (formErrors.ra) setFormErrors((prev) => ({ ...prev, ra: "" }));
+              }}
+              placeholder="Ex: 2026006"
+              required
+            />
+            <Select
+              label="Situação"
+              value={formData.situacao}
+              onChange={(val) => setFormData((prev) => ({ ...prev, situacao: val }))}
+              options={[
+                { value: "ATIVO", label: "Ativo" },
+                { value: "INATIVO", label: "Inativo" },
+              ]}
+              required
+            />
+          </div>
+
+          {/* E-MAIL & TELEFONE */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input
+              label="E-mail"
+              type="email"
+              value={formData.email}
+              error={formErrors.email}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, email: val }));
+                if (formErrors.email) setFormErrors((prev) => ({ ...prev, email: "" }));
+              }}
+              placeholder="aluno@univale.br"
+              required
+            />
+            <Input
+              label="Telefone / WhatsApp"
+              value={formData.telefone}
+              onChange={(val) => setFormData((prev) => ({ ...prev, telefone: val }))}
+              placeholder="(11) 98877-6655"
+            />
+          </div>
+
+          {/* USUÁRIO VINCULADO */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+              Acesso ao Sistema (Opcional)
+            </p>
+            <Select
+              label="Vincular a Usuário de Login"
+              value={formData.id_usuario}
+              onChange={(val) => setFormData((prev) => ({ ...prev, id_usuario: val }))}
+              options={DB.usuarios
+                .filter((u) => u.perfil === "ALUNO")
+                .map((u) => ({ value: String(u.id), label: `${u.nome} (${u.email})` }))}
+            />
+          </div>
+
+          {/* MATRÍCULA / GRUPO */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+              Vincular a Grupo Acadêmico
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Select
+                label="Grupo de Atendimento"
+                value={formData.id_grupo}
+                onChange={(val) => setFormData((prev) => ({ ...prev, id_grupo: val }))}
+                options={DB.grupos
+                  .filter((g) => g.situacao === "ATIVO")
+                  .map((g) => ({ value: String(g.id), label: g.grupo }))}
+              />
+              <Select
+                label="Período Letivo"
+                value={formData.id_periodo_letivo}
+                onChange={(val) => setFormData((prev) => ({ ...prev, id_periodo_letivo: val }))}
+                options={DB.periodos
+                  .filter((p) => p.situacao === "ATIVO")
+                  .map((p) => ({ value: String(p.id), label: p.periodo }))}
+              />
+            </div>
+          </div>
+
+          {/* LIVE SELECTION PREVIEW BOX */}
+          {(formData.nome || formData.ra || formData.email || formData.id_grupo || formData.id_usuario) && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-xs space-y-1.5 mt-1">
+              <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                <CheckCircle size={14} />
+                Resumo do Aluno Selecionado:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground pt-1">
+                <div>
+                  <span className="font-medium text-foreground">Nome: </span>
+                  {formData.nome ? (
+                    <span className="text-primary font-semibold">{formData.nome}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não preenchido</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">RA: </span>
+                  {formData.ra ? (
+                    <span className="font-mono font-medium text-foreground">{formData.ra}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não informado</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">E-mail: </span>
+                  {formData.email ? (
+                    <span className="text-foreground">{formData.email}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não informado</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Telefone: </span>
+                  {formData.telefone ? (
+                    <span className="text-foreground">{formData.telefone}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não informado</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Grupo / Período: </span>
+                  {previewGrupo ? (
+                    <span className="text-foreground">{previewGrupo.grupo} ({previewPeriodo?.periodo ?? "Período Ativo"})</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Sem grupo</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Situação: </span>
+                  <Badge label={formData.situacao} />
+                </div>
+                {previewUser && (
+                  <div className="col-span-full">
+                    <span className="font-medium text-foreground">Conta vinculada: </span>
+                    <span className="text-foreground">{previewUser.nome} ({previewUser.email})</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
+
+      {/* CONFIRM DELETE MODAL */}
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={() => confirmDeleteId && handleDelete(confirmDeleteId)}
+        title="Excluir Aluno"
+        message="Tem certeza de que deseja excluir este aluno? Esta ação não pode ser desfeita."
+        confirmLabel="Sim, excluir"
+      />
     </div>
   );
 }
 
-function AlunoDetalhePage({ id, onBack, onNav }: { id: number; onBack: () => void; onNav: (p: Page, id?: number) => void }) {
+function AlunoDetalhePage({ id, onBack, onNav, showToast }: {
+  id: number; onBack: () => void;
+  onNav: (p: Page, id?: number) => void;
+  showToast?: (m: string, t?: "success" | "error") => void;
+}) {
+  const [, setTick] = useState(0);
   const aluno = DB.alunos.find((a) => a.id === id);
   if (!aluno) return null;
 
@@ -1463,6 +1870,12 @@ function AlunoDetalhePage({ id, onBack, onNav }: { id: number; onBack: () => voi
     matriculas.some((m) => m.id === ma.id_matricula)
   );
   const atends = DB.atendimentos.filter((a) => matAtends.some((ma) => ma.id_atendimento === a.id));
+
+  const toggleSituacao = () => {
+    aluno.situacao = aluno.situacao === "ATIVO" ? "INATIVO" : "ATIVO";
+    setTick((t) => t + 1);
+    if (showToast) showToast(`Situação do aluno alterada para ${aluno.situacao}.`);
+  };
 
   return (
     <div>
@@ -1476,7 +1889,9 @@ function AlunoDetalhePage({ id, onBack, onNav }: { id: number; onBack: () => voi
           <p className="text-sm text-muted-foreground">RA {aluno.ra}</p>
         </div>
         <div className="ml-auto flex gap-2">
-          <Btn variant="secondary" size="sm" icon={<Edit2 size={13} />}>Editar</Btn>
+          <Btn variant="secondary" size="sm" icon={<RefreshCw size={13} />} onClick={toggleSituacao}>
+            Alternar Situação
+          </Btn>
           <Badge label={aluno.situacao} />
         </div>
       </div>
@@ -1488,7 +1903,7 @@ function AlunoDetalhePage({ id, onBack, onNav }: { id: number; onBack: () => voi
             <InfoRow label="Nome" value={aluno.nome} />
             <InfoRow label="RA" value={<span className="font-mono">{aluno.ra}</span>} />
             <InfoRow label="E-mail" value={aluno.email} />
-            <InfoRow label="Telefone" value={aluno.telefone} />
+            <InfoRow label="Telefone" value={aluno.telefone || "—"} />
             <InfoRow label="Situação" value={<Badge label={aluno.situacao} />} />
           </div>
         </Card>
@@ -1517,7 +1932,7 @@ function AlunoDetalhePage({ id, onBack, onNav }: { id: number; onBack: () => voi
 
       <Card>
         <div className="px-4 py-3 border-b border-border">
-          <h3 className="font-semibold text-sm">Atendimentos</h3>
+          <h3 className="font-semibold text-sm">Atendimentos ({atends.length})</h3>
         </div>
         {atends.length === 0 ? <EmptyState message="Nenhum atendimento registrado." /> : (
           <div className="overflow-x-auto">
@@ -1567,40 +1982,224 @@ function PacientesPage({ onNav, showToast }: {
   onNav: (p: Page, id?: number) => void;
   showToast: (m: string, t?: "success" | "error") => void;
 }) {
+  const [pacientesList, setPacientesList] = useState<Paciente[]>(() => [...DB.pacientes]);
   const [search, setSearch] = useState("");
   const [filterSit, setFilterSit] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [editingPaciente, setEditingPaciente] = useState<Paciente | null>(null);
   const [confirmId, setConfirmId] = useState<number | null>(null);
 
-  const filtered = DB.pacientes.filter((p) => {
-    const s = search.toLowerCase();
-    const match = !s || p.nome_completo.toLowerCase().includes(s) || p.cod_prontuario.toLowerCase().includes(s) || p.cpf.includes(s);
-    const matchSit = !filterSit || p.situacao === filterSit;
-    return match && matchSit;
-  });
+  const initialFormState = {
+    cod_prontuario: "",
+    nome_completo: "",
+    data_nascimento: "2018-05-10",
+    cpf: "",
+    local_fisico: "Arquivo Central — Gaveta 1",
+    situacao: "ATIVO",
+    id_responsavel: "",
+    grau_parentesco: "Mãe",
+  };
+
+  const [formData, setFormData] = useState(initialFormState);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const filtered = useMemo(() => {
+    return pacientesList.filter((p) => {
+      const s = search.toLowerCase().trim();
+      const matchSearch =
+        !s ||
+        p.nome_completo.toLowerCase().includes(s) ||
+        p.cod_prontuario.toLowerCase().includes(s) ||
+        p.cpf.includes(s);
+      const matchSit = !filterSit || p.situacao === filterSit;
+      return matchSearch && matchSit;
+    });
+  }, [pacientesList, search, filterSit]);
+
+  const handleOpenCreateModal = () => {
+    const maxNum = DB.pacientes.reduce((max, p) => {
+      const match = p.cod_prontuario.match(/PRONT-(\d+)/i);
+      return match ? Math.max(max, parseInt(match[1], 10)) : max;
+    }, 0);
+    const nextPront = `PRONT-${String(maxNum + 1).padStart(3, "0")}`;
+
+    setFormData({
+      cod_prontuario: nextPront,
+      nome_completo: "",
+      data_nascimento: "2018-05-10",
+      cpf: "",
+      local_fisico: "Arquivo Central — Gaveta 1",
+      situacao: "ATIVO",
+      id_responsavel: "",
+      grau_parentesco: "Mãe",
+    });
+    setFormErrors({});
+    setEditingPaciente(null);
+    setShowModal(true);
+  };
+
+  const handleOpenEditModal = (p: Paciente) => {
+    const rel = DB.responsaveis_pacientes.find((rp) => rp.id_paciente === p.id);
+    setFormData({
+      cod_prontuario: p.cod_prontuario,
+      nome_completo: p.nome_completo,
+      data_nascimento: p.data_nascimento,
+      cpf: p.cpf,
+      local_fisico: p.local_fisico,
+      situacao: p.situacao,
+      id_responsavel: rel ? String(rel.id_responsavel) : "",
+      grau_parentesco: rel?.grau_parentesco || "Mãe",
+    });
+    setFormErrors({});
+    setEditingPaciente(p);
+    setShowModal(true);
+  };
+
+  const handleSave = () => {
+    const errors: Record<string, string> = {};
+    if (!formData.cod_prontuario.trim()) errors.cod_prontuario = "Informe o código do prontuário";
+    if (!formData.nome_completo.trim()) errors.nome_completo = "Informe o nome completo do paciente";
+    if (!formData.data_nascimento) errors.data_nascimento = "Informe a data de nascimento";
+    if (!formData.cpf.trim()) errors.cpf = "Informe o CPF";
+
+    // Duplicate check for prontuario
+    const dupPront = DB.pacientes.find(
+      (p) =>
+        p.cod_prontuario.trim().toLowerCase() === formData.cod_prontuario.trim().toLowerCase() &&
+        (!editingPaciente || p.id !== editingPaciente.id)
+    );
+    if (dupPront) errors.cod_prontuario = "Já existe um paciente com este prontuário";
+
+    // Duplicate check for CPF
+    const dupCpf = DB.pacientes.find(
+      (p) =>
+        p.cpf.trim() === formData.cpf.trim() &&
+        (!editingPaciente || p.id !== editingPaciente.id)
+    );
+    if (dupCpf && formData.cpf.trim() !== "—") errors.cpf = "Já existe um paciente com este CPF";
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      showToast("Preencha todos os campos obrigatórios corretamente.", "error");
+      return;
+    }
+
+    if (editingPaciente) {
+      // Update
+      const idx = DB.pacientes.findIndex((p) => p.id === editingPaciente.id);
+      if (idx !== -1) {
+        DB.pacientes[idx] = {
+          ...DB.pacientes[idx],
+          cod_prontuario: formData.cod_prontuario.trim(),
+          nome_completo: formData.nome_completo.trim(),
+          data_nascimento: formData.data_nascimento,
+          cpf: formData.cpf.trim(),
+          local_fisico: formData.local_fisico.trim() || "Arquivo Central",
+          situacao: formData.situacao,
+        };
+      }
+
+      // Update or link responsavel
+      if (formData.id_responsavel) {
+        const respRelIdx = DB.responsaveis_pacientes.findIndex((rp) => rp.id_paciente === editingPaciente.id);
+        if (respRelIdx !== -1) {
+          DB.responsaveis_pacientes[respRelIdx].id_responsavel = Number(formData.id_responsavel);
+          DB.responsaveis_pacientes[respRelIdx].grau_parentesco = formData.grau_parentesco;
+        } else {
+          const nextRpId = DB.responsaveis_pacientes.reduce((m, rp) => Math.max(m, rp.id), 0) + 1;
+          DB.responsaveis_pacientes.push({
+            id: nextRpId,
+            id_responsavel: Number(formData.id_responsavel),
+            id_paciente: editingPaciente.id,
+            grau_parentesco: formData.grau_parentesco,
+            observacoes: "",
+          });
+        }
+      }
+
+      setPacientesList([...DB.pacientes]);
+      setShowModal(false);
+      setEditingPaciente(null);
+      showToast("Paciente atualizado com sucesso!");
+    } else {
+      // Create new
+      const nextId = DB.pacientes.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+      const newPaciente: Paciente = {
+        id: nextId,
+        cod_prontuario: formData.cod_prontuario.trim(),
+        nome_completo: formData.nome_completo.trim(),
+        data_nascimento: formData.data_nascimento,
+        cpf: formData.cpf.trim(),
+        local_fisico: formData.local_fisico.trim() || "Arquivo Central — Gaveta 1",
+        situacao: formData.situacao || "ATIVO",
+      };
+
+      DB.pacientes.unshift(newPaciente);
+
+      // Link responsavel if selected
+      if (formData.id_responsavel) {
+        const nextRpId = DB.responsaveis_pacientes.reduce((m, rp) => Math.max(m, rp.id), 0) + 1;
+        DB.responsaveis_pacientes.push({
+          id: nextRpId,
+          id_responsavel: Number(formData.id_responsavel),
+          id_paciente: nextId,
+          grau_parentesco: formData.grau_parentesco,
+          observacoes: "",
+        });
+      }
+
+      setPacientesList([...DB.pacientes]);
+      setShowModal(false);
+      showToast("Paciente cadastrado com sucesso!");
+    }
+  };
+
+  const handleDelete = (id: number) => {
+    const idx = DB.pacientes.findIndex((p) => p.id === id);
+    if (idx !== -1) {
+      DB.pacientes.splice(idx, 1);
+      const remainingRps = DB.responsaveis_pacientes.filter((rp) => rp.id_paciente !== id);
+      DB.responsaveis_pacientes.length = 0;
+      DB.responsaveis_pacientes.push(...remainingRps);
+
+      setPacientesList([...DB.pacientes]);
+      setConfirmId(null);
+      showToast("Paciente excluído com sucesso.");
+    }
+  };
+
+  // Preview helper
+  const previewResp = DB.responsaveis.find((r) => String(r.id) === formData.id_responsavel);
 
   return (
     <div>
       <Breadcrumb items={[{ label: "Gestão Clínica" }, { label: "Pacientes" }]} />
       <PageHeader
         title="Pacientes"
-        sub={`${DB.pacientes.length} pacientes cadastrados`}
-        action={<Btn icon={<Plus size={14} />} onClick={() => setShowModal(true)}>Novo Paciente</Btn>}
+        sub={`${pacientesList.length} pacientes cadastrados no sistema`}
+        action={<Btn icon={<Plus size={14} />} onClick={handleOpenCreateModal}>Novo Paciente</Btn>}
       />
+
       <Card>
-        <div className="flex flex-wrap gap-2 p-3 border-b border-border">
-          <SearchBar value={search} onChange={setSearch} placeholder="Buscar por nome, prontuário ou CPF..." />
-          <select
-            value={filterSit}
-            onChange={(e) => setFilterSit(e.target.value)}
-            className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none"
-          >
-            <option value="">Todas as situações</option>
-            {["ATIVO", "INATIVO", "ALTA", "ARQUIVADO"].map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
+        <div className="flex flex-wrap gap-2 p-3 border-b border-border items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center">
+            <SearchBar value={search} onChange={setSearch} placeholder="Buscar por nome, prontuário ou CPF..." />
+            <select
+              value={filterSit}
+              onChange={(e) => setFilterSit(e.target.value)}
+              className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Todas as situações</option>
+              {["ATIVO", "INATIVO", "ALTA", "ARQUIVADO"].map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            Exibindo {filtered.length} de {pacientesList.length} pacientes
+          </span>
         </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -1611,24 +2210,45 @@ function PacientesPage({ onNav, showToast }: {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {filtered.length === 0 && <tr><td colSpan={7}><EmptyState /></td></tr>}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={7}>
+                    <EmptyState message="Nenhum paciente encontrado." />
+                  </td>
+                </tr>
+              )}
               {filtered.map((p) => (
                 <tr key={p.id} className="hover:bg-accent/40 transition">
-                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{p.cod_prontuario}</td>
-                  <td className="px-4 py-3 font-medium">{p.nome_completo}</td>
+                  <td className="px-4 py-3 font-mono text-xs font-semibold text-primary">{p.cod_prontuario}</td>
+                  <td className="px-4 py-3 font-medium text-foreground">
+                    <div>{p.nome_completo}</div>
+                    <div className="text-[11px] text-muted-foreground">{calcIdade(p.data_nascimento)} anos</div>
+                  </td>
                   <td className="px-4 py-3 text-muted-foreground">{fmtDate(p.data_nascimento)}</td>
                   <td className="px-4 py-3 text-muted-foreground font-mono text-xs">{p.cpf}</td>
                   <td className="px-4 py-3 text-muted-foreground text-xs">{p.local_fisico}</td>
                   <td className="px-4 py-3"><Badge label={p.situacao} /></td>
                   <td className="px-4 py-3">
-                    <div className="flex gap-1">
-                      <button className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-primary" onClick={() => onNav("paciente-detalhe", p.id)}>
+                    <div className="flex items-center gap-1">
+                      <button
+                        className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-primary"
+                        onClick={() => onNav("paciente-detalhe", p.id)}
+                        title="Ver prontuário"
+                      >
                         <Eye size={13} />
                       </button>
-                      <button className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground">
+                      <button
+                        className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"
+                        onClick={() => handleOpenEditModal(p)}
+                        title="Editar"
+                      >
                         <Edit2 size={13} />
                       </button>
-                      <button className="p-1 hover:bg-red-50 rounded transition text-muted-foreground hover:text-red-600" onClick={() => setConfirmId(p.id)}>
+                      <button
+                        className="p-1 hover:bg-red-50 rounded transition text-muted-foreground hover:text-red-600"
+                        onClick={() => setConfirmId(p.id)}
+                        title="Excluir"
+                      >
                         <Trash2 size={13} />
                       </button>
                     </div>
@@ -1640,35 +2260,179 @@ function PacientesPage({ onNav, showToast }: {
         </div>
       </Card>
 
+      {/* MODAL NOVO / EDITAR PACIENTE */}
       <Modal
         open={showModal}
-        title="Novo Paciente"
-        onClose={() => setShowModal(false)}
+        title={editingPaciente ? `Editar Paciente — ${editingPaciente.cod_prontuario}` : "Novo Paciente"}
+        onClose={() => { setShowModal(false); setEditingPaciente(null); }}
         footer={
           <>
-            <Btn variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Btn>
-            <Btn onClick={() => { setShowModal(false); showToast("Paciente cadastrado com sucesso!"); }}>Salvar</Btn>
+            <Btn variant="secondary" onClick={() => { setShowModal(false); setEditingPaciente(null); }}>
+              Cancelar
+            </Btn>
+            <Btn onClick={handleSave}>
+              {editingPaciente ? "Atualizar" : "Salvar"}
+            </Btn>
           </>
         }
       >
-        <div className="flex flex-col gap-3">
-          <Input label="Código do Prontuário" value="" onChange={() => { }} placeholder="Ex: PRONT-006" required />
-          <Input label="Nome completo" value="" onChange={() => { }} placeholder="Nome do paciente" required />
-          <Input label="Data de Nascimento" value="" onChange={() => { }} type="date" required />
-          <Input label="CPF" value="" onChange={() => { }} placeholder="000.000.000-00" />
-          <Input label="Local Físico do Prontuário" value="" onChange={() => { }} placeholder="Ex: Arquivo A — Gaveta 1" />
-          <Select label="Situação" value="" onChange={() => { }}
-            options={["ATIVO", "INATIVO", "ALTA", "ARQUIVADO"].map((s) => ({ value: s, label: s }))} />
+        <div className="flex flex-col gap-3.5">
+          {/* PRONTUÁRIO & SITUAÇÃO */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input
+              label="Código do Prontuário"
+              value={formData.cod_prontuario}
+              error={formErrors.cod_prontuario}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, cod_prontuario: val }));
+                if (formErrors.cod_prontuario) setFormErrors((prev) => ({ ...prev, cod_prontuario: "" }));
+              }}
+              placeholder="Ex: PRONT-006"
+              required
+            />
+            <Select
+              label="Situação"
+              value={formData.situacao}
+              onChange={(val) => setFormData((prev) => ({ ...prev, situacao: val }))}
+              options={["ATIVO", "INATIVO", "ALTA", "ARQUIVADO"].map((s) => ({ value: s, label: s }))}
+              required
+            />
+          </div>
+
+          {/* NOME COMPLETO */}
+          <Input
+            label="Nome Completo do Paciente"
+            value={formData.nome_completo}
+            error={formErrors.nome_completo}
+            onChange={(val) => {
+              setFormData((prev) => ({ ...prev, nome_completo: val }));
+              if (formErrors.nome_completo) setFormErrors((prev) => ({ ...prev, nome_completo: "" }));
+            }}
+            placeholder="Nome completo do paciente"
+            required
+          />
+
+          {/* DATA DE NASCIMENTO & CPF */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input
+              label="Data de Nascimento"
+              type="date"
+              value={formData.data_nascimento}
+              error={formErrors.data_nascimento}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, data_nascimento: val }));
+                if (formErrors.data_nascimento) setFormErrors((prev) => ({ ...prev, data_nascimento: "" }));
+              }}
+              required
+            />
+            <Input
+              label="CPF"
+              value={formData.cpf}
+              error={formErrors.cpf}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, cpf: val }));
+                if (formErrors.cpf) setFormErrors((prev) => ({ ...prev, cpf: "" }));
+              }}
+              placeholder="000.000.000-00"
+              required
+            />
+          </div>
+
+          {/* LOCAL FÍSICO DO PRONTUÁRIO */}
+          <Input
+            label="Local Físico do Prontuário"
+            value={formData.local_fisico}
+            onChange={(val) => setFormData((prev) => ({ ...prev, local_fisico: val }))}
+            placeholder="Ex: Arquivo Central — Gaveta 1"
+          />
+
+          {/* VINCULAR RESPONSÁVEL (OPCIONAL) */}
+          <div className="border-t border-border pt-3 mt-1">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+              Vínculo de Responsável (Opcional)
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Select
+                label="Responsável"
+                value={formData.id_responsavel}
+                onChange={(val) => setFormData((prev) => ({ ...prev, id_responsavel: val }))}
+                options={[
+                  { value: "", label: "Nenhum responsável vinculado" },
+                  ...DB.responsaveis.map((r) => ({
+                    value: String(r.id),
+                    label: `${r.nome_completo} (${r.cpf})`,
+                  })),
+                ]}
+              />
+              {formData.id_responsavel && (
+                <Input
+                  label="Grau de Parentesco"
+                  value={formData.grau_parentesco}
+                  onChange={(val) => setFormData((prev) => ({ ...prev, grau_parentesco: val }))}
+                  placeholder="Ex: Mãe, Pai, Cônjuge, Tutor"
+                />
+              )}
+            </div>
+          </div>
+
+          {/* LIVE SELECTION PREVIEW BOX */}
+          {(formData.nome_completo || formData.cod_prontuario) && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-xs space-y-1.5 mt-1">
+              <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                <CheckCircle size={14} />
+                Resumo do Paciente Selecionado:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground pt-1">
+                <div>
+                  <span className="font-medium text-foreground">Prontuário: </span>
+                  <span className="font-mono text-primary font-semibold">{formData.cod_prontuario}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Situação: </span>
+                  <Badge label={formData.situacao} />
+                </div>
+                <div className="col-span-full">
+                  <span className="font-medium text-foreground">Nome: </span>
+                  <span className="text-foreground font-medium">{formData.nome_completo || "—"}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Nascimento: </span>
+                  <span className="text-foreground">
+                    {formData.data_nascimento ? `${fmtDate(formData.data_nascimento)} (${calcIdade(formData.data_nascimento)} anos)` : "—"}
+                  </span>
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">CPF: </span>
+                  <span className="font-mono text-foreground">{formData.cpf || "—"}</span>
+                </div>
+                {formData.local_fisico && (
+                  <div className="col-span-full">
+                    <span className="font-medium text-foreground">Local Físico: </span>
+                    <span className="text-foreground">{formData.local_fisico}</span>
+                  </div>
+                )}
+                {previewResp && (
+                  <div className="col-span-full">
+                    <span className="font-medium text-foreground">Responsável: </span>
+                    <span className="text-foreground">
+                      {previewResp.nome_completo} ({formData.grau_parentesco}) • {previewResp.whatsapp}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
 
+      {/* CONFIRM DELETE MODAL */}
       <ConfirmModal
         open={confirmId !== null}
         onClose={() => setConfirmId(null)}
-        onConfirm={() => { setConfirmId(null); showToast("Paciente excluído.", "error"); }}
-        title="Excluir paciente?"
-        message="Esta ação não poderá ser desfeita. O prontuário e o histórico do paciente serão removidos."
-        confirmLabel="Excluir paciente"
+        onConfirm={() => confirmId && handleDelete(confirmId)}
+        title="Excluir Paciente"
+        message="Esta ação não poderá ser desfeita. O prontuário e os relacionamentos do paciente serão removidos."
+        confirmLabel="Sim, excluir paciente"
       />
     </div>
   );
@@ -1679,8 +2443,10 @@ function PacienteDetalhePage({ id, onBack, onNav, showToast }: {
   onNav: (p: Page, id?: number) => void;
   showToast: (m: string, t?: "success" | "error") => void;
 }) {
-  const pac = DB.pacientes.find((p) => p.id === id);
-  if (!pac) return null;
+  const [pac, setPac] = useState<Paciente | undefined>(() => DB.pacientes.find((p) => p.id === id));
+  const [showEditModal, setShowEditModal] = useState(false);
+
+  if (!pac) return <div>Paciente não encontrado.</div>;
 
   const resps = DB.responsaveis_pacientes
     .filter((rp) => rp.id_paciente === pac.id)
@@ -1690,6 +2456,16 @@ function PacienteDetalhePage({ id, onBack, onNav, showToast }: {
     }));
 
   const atends = DB.atendimentos.filter((a) => a.id_paciente === pac.id);
+
+  const toggleSituacao = () => {
+    const nextSit = pac.situacao === "ATIVO" ? "INATIVO" : "ATIVO";
+    const idx = DB.pacientes.findIndex((p) => p.id === pac.id);
+    if (idx !== -1) {
+      DB.pacientes[idx].situacao = nextSit;
+      setPac({ ...DB.pacientes[idx] });
+      showToast(`Situação alterada para ${nextSit}`);
+    }
+  };
 
   return (
     <div>
@@ -1702,8 +2478,10 @@ function PacienteDetalhePage({ id, onBack, onNav, showToast }: {
           <h1 className="text-xl font-semibold">{pac.nome_completo}</h1>
           <p className="text-sm text-muted-foreground">{pac.cod_prontuario} • {calcIdade(pac.data_nascimento)} anos</p>
         </div>
-        <div className="ml-auto flex gap-2">
-          <Btn variant="secondary" size="sm" icon={<Edit2 size={13} />}>Editar</Btn>
+        <div className="ml-auto flex items-center gap-2">
+          <Btn variant="secondary" size="sm" onClick={toggleSituacao}>
+            {pac.situacao === "ATIVO" ? "Inativar" : "Ativar"}
+          </Btn>
           <Badge label={pac.situacao} />
         </div>
       </div>
@@ -1715,7 +2493,7 @@ function PacienteDetalhePage({ id, onBack, onNav, showToast }: {
             <InfoRow label="Nome completo" value={pac.nome_completo} />
             <InfoRow label="Data de Nascimento" value={`${fmtDate(pac.data_nascimento)} (${calcIdade(pac.data_nascimento)} anos)`} />
             <InfoRow label="CPF" value={pac.cpf} />
-            <InfoRow label="Código do Prontuário" value={<span className="font-mono">{pac.cod_prontuario}</span>} />
+            <InfoRow label="Código do Prontuário" value={<span className="font-mono text-primary font-semibold">{pac.cod_prontuario}</span>} />
             <InfoRow label="Local Físico" value={pac.local_fisico} />
             <InfoRow label="Situação" value={<Badge label={pac.situacao} />} />
           </div>
@@ -1724,8 +2502,8 @@ function PacienteDetalhePage({ id, onBack, onNav, showToast }: {
         <Card className="p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-sm">Responsáveis</h3>
-            <Btn size="sm" variant="secondary" icon={<Plus size={12} />} onClick={() => showToast("Use o módulo de Responsáveis para vincular.")}>
-              Vincular
+            <Btn size="sm" variant="secondary" icon={<Plus size={12} />} onClick={() => onNav("responsaveis")}>
+              Gerenciar
             </Btn>
           </div>
           {resps.length === 0 ? (
@@ -1746,10 +2524,11 @@ function PacienteDetalhePage({ id, onBack, onNav, showToast }: {
       </div>
 
       <Card>
-        <div className="px-4 py-3 border-b border-border">
+        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
           <h3 className="font-semibold text-sm">Histórico de Atendimentos</h3>
+          <span className="text-xs text-muted-foreground">{atends.length} atendimento{atends.length !== 1 ? "s" : ""}</span>
         </div>
-        {atends.length === 0 ? <EmptyState /> : (
+        {atends.length === 0 ? <EmptyState message="Nenhum atendimento registrado para este paciente." /> : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -1887,77 +2666,324 @@ function ResponsaveisPage({ showToast }: { showToast: (m: string, t?: "success" 
 // GRUPOS PAGE
 // ============================================================
 function GruposPage({ showToast }: { showToast: (m: string, t?: "success" | "error") => void }) {
+  const [gruposList, setGruposList] = useState<Grupo[]>(() => [...DB.grupos]);
+  const [search, setSearch] = useState("");
+  const [filterSit, setFilterSit] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [editingGrupo, setEditingGrupo] = useState<Grupo | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+
+  const initialFormState = {
+    grupo: "",
+    situacao: "ATIVO",
+    id_periodo_letivo: "3", // default to active period 2025/1
+  };
+
+  const [formData, setFormData] = useState(initialFormState);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const enrichedGrupos = useMemo(() => {
+    return gruposList.map((g) => {
+      const matriculasAtivas = DB.matriculas.filter((m) => m.id_grupo === g.id && m.situacao === "ATIVA");
+      const alunoCount = matriculasAtivas.length;
+      const alunos = matriculasAtivas
+        .map((m) => DB.alunos.find((a) => a.id === m.id_aluno))
+        .filter(Boolean);
+      const periodos = [...new Set(
+        DB.matriculas.filter((m) => m.id_grupo === g.id).map((m) => m.id_periodo_letivo)
+      )].map((pid) => DB.periodos.find((p) => p.id === pid)?.periodo).filter(Boolean);
+
+      return { ...g, alunoCount, alunos, periodos };
+    });
+  }, [gruposList]);
+
+  const filtered = useMemo(() => {
+    return enrichedGrupos.filter((g) => {
+      const s = search.toLowerCase().trim();
+      const matchSearch = !s || g.grupo.toLowerCase().includes(s);
+      const matchSit = !filterSit || g.situacao === filterSit;
+      return matchSearch && matchSit;
+    });
+  }, [enrichedGrupos, search, filterSit]);
+
+  const handleOpenCreateModal = () => {
+    const existingNames = DB.grupos.map((g) => g.grupo.toUpperCase());
+    let nextLetter = "D";
+    const letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
+    for (const l of letters) {
+      if (!existingNames.some((n) => n.includes(`GRUPO ${l}`))) {
+        nextLetter = l;
+        break;
+      }
+    }
+
+    setFormData({
+      grupo: `Grupo ${nextLetter}`,
+      situacao: "ATIVO",
+      id_periodo_letivo: "3",
+    });
+    setFormErrors({});
+    setEditingGrupo(null);
+    setShowModal(true);
+  };
+
+  const handleOpenEditModal = (g: Grupo) => {
+    setFormData({
+      grupo: g.grupo,
+      situacao: g.situacao,
+      id_periodo_letivo: "3",
+    });
+    setFormErrors({});
+    setEditingGrupo(g);
+    setShowModal(true);
+  };
+
+  const handleSave = () => {
+    const errors: Record<string, string> = {};
+    if (!formData.grupo.trim()) errors.grupo = "Informe o nome do grupo";
+
+    const duplicate = DB.grupos.find(
+      (g) => g.grupo.trim().toLowerCase() === formData.grupo.trim().toLowerCase() && (!editingGrupo || g.id !== editingGrupo.id)
+    );
+    if (duplicate) {
+      errors.grupo = "Já existe um grupo com este nome";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      showToast("Preencha todos os campos obrigatórios corretamente.", "error");
+      return;
+    }
+
+    if (editingGrupo) {
+      // Update
+      const idx = DB.grupos.findIndex((g) => g.id === editingGrupo.id);
+      if (idx !== -1) {
+        DB.grupos[idx] = {
+          ...DB.grupos[idx],
+          grupo: formData.grupo.trim(),
+          situacao: formData.situacao,
+        };
+      }
+      setGruposList([...DB.grupos]);
+      setShowModal(false);
+      setEditingGrupo(null);
+      showToast("Grupo atualizado com sucesso!");
+    } else {
+      // Create new
+      const nextId = DB.grupos.reduce((m, g) => Math.max(m, g.id), 0) + 1;
+      const newGrupo: Grupo = {
+        id: nextId,
+        grupo: formData.grupo.trim(),
+        situacao: formData.situacao || "ATIVO",
+      };
+
+      DB.grupos.push(newGrupo);
+      setGruposList([...DB.grupos]);
+      setShowModal(false);
+      showToast("Grupo cadastrado com sucesso!");
+    }
+  };
+
+  const handleDelete = (id: number) => {
+    const idx = DB.grupos.findIndex((g) => g.id === id);
+    if (idx !== -1) {
+      DB.grupos.splice(idx, 1);
+      setGruposList([...DB.grupos]);
+      setConfirmDeleteId(null);
+      showToast("Grupo excluído com sucesso.");
+    }
+  };
 
   return (
     <div>
       <Breadcrumb items={[{ label: "Gestão Acadêmica" }, { label: "Grupos" }]} />
       <PageHeader
         title="Grupos"
-        sub="Agrupamentos de alunos"
-        action={<Btn icon={<Plus size={14} />} onClick={() => setShowModal(true)}>Novo Grupo</Btn>}
+        sub={`${gruposList.length} grupos acadêmicos cadastrados`}
+        action={<Btn icon={<Plus size={14} />} onClick={handleOpenCreateModal}>Novo Grupo</Btn>}
       />
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {DB.grupos.map((g) => {
-          const alunoCount = DB.matriculas.filter((m) => m.id_grupo === g.id && m.situacao === "ATIVA").length;
-          const alunos = DB.matriculas
-            .filter((m) => m.id_grupo === g.id && m.situacao === "ATIVA")
-            .map((m) => DB.alunos.find((a) => a.id === m.id_aluno))
-            .filter(Boolean);
-          const periodos = [...new Set(
-            DB.matriculas.filter((m) => m.id_grupo === g.id).map((m) => m.id_periodo_letivo)
-          )].map((pid) => DB.periodos.find((p) => p.id === pid)?.periodo).filter(Boolean);
 
-          return (
-            <Card key={g.id} className="p-4">
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <h3 className="font-semibold">{g.grupo}</h3>
-                  <p className="text-xs text-muted-foreground mt-0.5">{periodos.join(", ")}</p>
-                </div>
-                <Badge label={g.situacao} />
-              </div>
-              <div className="flex items-center gap-1.5 text-sm text-muted-foreground mb-3">
-                <GraduationCap size={14} />
-                <span>{alunoCount} aluno{alunoCount !== 1 ? "s" : ""} matriculados</span>
-              </div>
-              <div className="flex flex-col gap-1">
-                {alunos.slice(0, 3).map((a) => a && (
-                  <div key={a.id} className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center">
-                      <GraduationCap size={10} className="text-emerald-600" />
-                    </div>
-                    {a.nome} <span className="font-mono">({a.ra})</span>
+      <Card className="mb-4">
+        <div className="flex flex-wrap gap-2 p-3 items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center">
+            <SearchBar value={search} onChange={setSearch} placeholder="Buscar grupo por nome..." />
+            <select
+              value={filterSit}
+              onChange={(e) => setFilterSit(e.target.value)}
+              className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Todas as situações</option>
+              <option value="ATIVO">Ativo</option>
+              <option value="INATIVO">Inativo</option>
+            </select>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            Exibindo {filtered.length} de {gruposList.length} grupos
+          </span>
+        </div>
+      </Card>
+
+      {filtered.length === 0 ? (
+        <Card className="p-8">
+          <EmptyState message="Nenhum grupo encontrado." />
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filtered.map((g) => (
+            <Card key={g.id} className="p-4 flex flex-col justify-between hover:shadow-sm transition border-border">
+              <div>
+                <div className="flex items-start justify-between mb-3">
+                  <div>
+                    <h3 className="font-semibold text-base text-foreground">{g.grupo}</h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {g.periodos.length > 0 ? `Períodos: ${g.periodos.join(", ")}` : "Sem período vinculado"}
+                    </p>
                   </div>
-                ))}
-                {alunos.length > 3 && (
-                  <p className="text-xs text-muted-foreground">+{alunos.length - 3} outros</p>
-                )}
+                  <Badge label={g.situacao} />
+                </div>
+
+                <div className="flex items-center gap-1.5 text-xs font-medium text-foreground bg-muted/40 px-2.5 py-1.5 rounded-lg mb-3">
+                  <GraduationCap size={14} className="text-primary" />
+                  <span>{g.alunoCount} aluno{g.alunoCount !== 1 ? "s" : ""} matriculado{g.alunoCount !== 1 ? "s" : ""}</span>
+                </div>
+
+                <div className="flex flex-col gap-1.5 mb-3">
+                  {g.alunos.slice(0, 4).map((a) => a && (
+                    <div key={a.id} className="flex items-center justify-between text-xs text-muted-foreground bg-card p-1.5 rounded border border-border/60">
+                      <div className="flex items-center gap-2 truncate">
+                        <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+                          <GraduationCap size={10} className="text-emerald-600" />
+                        </div>
+                        <span className="truncate font-medium text-foreground">{a.nome}</span>
+                      </div>
+                      <span className="font-mono text-[10px] text-muted-foreground shrink-0 ml-1">RA {a.ra}</span>
+                    </div>
+                  ))}
+                  {g.alunos.length > 4 && (
+                    <p className="text-xs text-muted-foreground text-center pt-0.5">
+                      +{g.alunos.length - 4} outros alunos
+                    </p>
+                  )}
+                  {g.alunos.length === 0 && (
+                    <p className="text-xs text-muted-foreground italic py-1">Nenhum aluno vinculado no momento.</p>
+                  )}
+                </div>
               </div>
-              <div className="flex gap-2 mt-3 pt-3 border-t border-border">
-                <Btn size="sm" variant="secondary" icon={<Edit2 size={12} />}>Editar</Btn>
+
+              <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
+                <Btn size="sm" variant="secondary" icon={<Edit2 size={12} />} onClick={() => handleOpenEditModal(g)}>
+                  Editar
+                </Btn>
+                <button
+                  className="p-1.5 hover:bg-red-50 text-muted-foreground hover:text-red-600 rounded transition"
+                  onClick={() => setConfirmDeleteId(g.id)}
+                  title="Excluir grupo"
+                >
+                  <Trash2 size={14} />
+                </button>
               </div>
             </Card>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
+
+      {/* MODAL NOVO / EDITAR GRUPO */}
       <Modal
         open={showModal}
-        title="Novo Grupo"
-        onClose={() => setShowModal(false)}
+        title={editingGrupo ? `Editar Grupo #${editingGrupo.id}` : "Novo Grupo"}
+        onClose={() => { setShowModal(false); setEditingGrupo(null); }}
         footer={
           <>
-            <Btn variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Btn>
-            <Btn onClick={() => { setShowModal(false); showToast("Grupo cadastrado!"); }}>Salvar</Btn>
+            <Btn variant="secondary" onClick={() => { setShowModal(false); setEditingGrupo(null); }}>
+              Cancelar
+            </Btn>
+            <Btn onClick={handleSave}>
+              {editingGrupo ? "Atualizar" : "Salvar"}
+            </Btn>
           </>
         }
       >
-        <div className="flex flex-col gap-3">
-          <Input label="Nome do Grupo" value="" onChange={() => { }} placeholder="Ex: Grupo D" required />
-          <Select label="Situação" value="" onChange={() => { }}
-            options={[{ value: "ATIVO", label: "Ativo" }, { value: "INATIVO", label: "Inativo" }]} />
+        <div className="flex flex-col gap-3.5">
+          {/* NOME DO GRUPO */}
+          <Input
+            label="Nome do Grupo"
+            value={formData.grupo}
+            error={formErrors.grupo}
+            onChange={(val) => {
+              setFormData((prev) => ({ ...prev, grupo: val }));
+              if (formErrors.grupo) setFormErrors((prev) => ({ ...prev, grupo: "" }));
+            }}
+            placeholder="Ex: Grupo D"
+            required
+          />
+
+          {/* SITUAÇÃO */}
+          <Select
+            label="Situação"
+            value={formData.situacao}
+            onChange={(val) => setFormData((prev) => ({ ...prev, situacao: val }))}
+            options={[
+              { value: "ATIVO", label: "Ativo" },
+              { value: "INATIVO", label: "Inativo" },
+            ]}
+            required
+          />
+
+          {/* PERÍODO LETIVO INICIAL */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+              Período Letivo Principal
+            </p>
+            <Select
+              label="Período Letivo"
+              value={formData.id_periodo_letivo}
+              onChange={(val) => setFormData((prev) => ({ ...prev, id_periodo_letivo: val }))}
+              options={DB.periodos
+                .filter((p) => p.situacao === "ATIVO")
+                .map((p) => ({ value: String(p.id), label: `${p.periodo} (Ativo)` }))}
+            />
+          </div>
+
+          {/* LIVE SELECTION PREVIEW BOX */}
+          {formData.grupo && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-xs space-y-1.5 mt-1">
+              <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                <CheckCircle size={14} />
+                Resumo do Grupo Selecionado:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground pt-1">
+                <div>
+                  <span className="font-medium text-foreground">Nome do Grupo: </span>
+                  <span className="text-primary font-semibold">{formData.grupo}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Situação: </span>
+                  <Badge label={formData.situacao} />
+                </div>
+                {formData.id_periodo_letivo && (
+                  <div className="col-span-full">
+                    <span className="font-medium text-foreground">Período Letivo: </span>
+                    <span className="text-foreground">
+                      {DB.periodos.find((p) => String(p.id) === formData.id_periodo_letivo)?.periodo ?? "2025/1"}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
+
+      {/* CONFIRM DELETE MODAL */}
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={() => confirmDeleteId && handleDelete(confirmDeleteId)}
+        title="Excluir Grupo"
+        message="Tem certeza de que deseja excluir este grupo acadêmico? Esta ação não pode ser desfeita."
+        confirmLabel="Sim, excluir"
+      />
     </div>
   );
 }
@@ -1966,71 +2992,326 @@ function GruposPage({ showToast }: { showToast: (m: string, t?: "success" | "err
 // PERÍODOS LETIVOS PAGE
 // ============================================================
 function PeriodosPage({ showToast }: { showToast: (m: string, t?: "success" | "error") => void }) {
+  const [periodosList, setPeriodosList] = useState<Periodo[]>(() => [...DB.periodos]);
+  const [search, setSearch] = useState("");
+  const [filterSit, setFilterSit] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [editingPeriodo, setEditingPeriodo] = useState<Periodo | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+
+  const initialFormState = {
+    periodo: "",
+    data_inicial: "2025-08-01",
+    data_final: "2025-12-15",
+    situacao: "ATIVO",
+  };
+
+  const [formData, setFormData] = useState(initialFormState);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const enriched = useMemo(() => {
+    return periodosList.map((p) => {
+      const matCount = DB.matriculas.filter((m) => m.id_periodo_letivo === p.id).length;
+      return { ...p, matCount };
+    });
+  }, [periodosList]);
+
+  const filtered = useMemo(() => {
+    return enriched.filter((p) => {
+      const s = search.toLowerCase().trim();
+      const matchSearch = !s || p.periodo.toLowerCase().includes(s);
+      const matchSit = !filterSit || p.situacao === filterSit;
+      return matchSearch && matchSit;
+    });
+  }, [enriched, search, filterSit]);
+
+  const handleOpenCreateModal = () => {
+    const existing = DB.periodos.map((p) => p.periodo);
+    let suggested = "2025/2";
+    if (existing.includes("2025/2")) {
+      suggested = "2026/1";
+    }
+
+    setFormData({
+      periodo: suggested,
+      data_inicial: "2025-08-01",
+      data_final: "2025-12-15",
+      situacao: "ATIVO",
+    });
+    setFormErrors({});
+    setEditingPeriodo(null);
+    setShowModal(true);
+  };
+
+  const handleOpenEditModal = (p: Periodo) => {
+    setFormData({
+      periodo: p.periodo,
+      data_inicial: p.data_inicial,
+      data_final: p.data_final,
+      situacao: p.situacao,
+    });
+    setFormErrors({});
+    setEditingPeriodo(p);
+    setShowModal(true);
+  };
+
+  const handleSave = () => {
+    const errors: Record<string, string> = {};
+    if (!formData.periodo.trim()) errors.periodo = "Informe o período (Ex: 2025/2)";
+    if (!formData.data_inicial) errors.data_inicial = "Informe a data inicial";
+    if (!formData.data_final) errors.data_final = "Informe a data final";
+
+    if (formData.data_inicial && formData.data_final && formData.data_final < formData.data_inicial) {
+      errors.data_final = "A data final não pode ser anterior à data inicial";
+    }
+
+    const duplicate = DB.periodos.find(
+      (p) =>
+        p.periodo.trim().toLowerCase() === formData.periodo.trim().toLowerCase() &&
+        (!editingPeriodo || p.id !== editingPeriodo.id)
+    );
+    if (duplicate) {
+      errors.periodo = "Já existe um período com esta identificação";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      showToast("Preencha os campos corretamente.", "error");
+      return;
+    }
+
+    if (editingPeriodo) {
+      // Update
+      const idx = DB.periodos.findIndex((p) => p.id === editingPeriodo.id);
+      if (idx !== -1) {
+        DB.periodos[idx] = {
+          ...DB.periodos[idx],
+          periodo: formData.periodo.trim(),
+          data_inicial: formData.data_inicial,
+          data_final: formData.data_final,
+          situacao: formData.situacao,
+        };
+      }
+      setPeriodosList([...DB.periodos]);
+      setShowModal(false);
+      setEditingPeriodo(null);
+      showToast("Período letivo atualizado com sucesso!");
+    } else {
+      // Create new
+      const nextId = DB.periodos.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+      const newPeriodo: Periodo = {
+        id: nextId,
+        periodo: formData.periodo.trim(),
+        data_inicial: formData.data_inicial,
+        data_final: formData.data_final,
+        situacao: formData.situacao || "ATIVO",
+      };
+
+      DB.periodos.unshift(newPeriodo);
+      setPeriodosList([...DB.periodos]);
+      setShowModal(false);
+      showToast("Período letivo cadastrado com sucesso!");
+    }
+  };
+
+  const handleDelete = (id: number) => {
+    const idx = DB.periodos.findIndex((p) => p.id === id);
+    if (idx !== -1) {
+      DB.periodos.splice(idx, 1);
+      setPeriodosList([...DB.periodos]);
+      setConfirmDeleteId(null);
+      showToast("Período letivo excluído com sucesso.");
+    }
+  };
 
   return (
     <div>
       <Breadcrumb items={[{ label: "Gestão Acadêmica" }, { label: "Períodos Letivos" }]} />
       <PageHeader
         title="Períodos Letivos"
-        sub="Gerenciamento de períodos letivos"
-        action={<Btn icon={<Plus size={14} />} onClick={() => setShowModal(true)}>Novo Período</Btn>}
+        sub={`${periodosList.length} períodos letivos cadastrados`}
+        action={<Btn icon={<Plus size={14} />} onClick={handleOpenCreateModal}>Novo Período</Btn>}
       />
+
       <Card>
+        <div className="flex flex-wrap gap-2 p-3 border-b border-border items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center">
+            <SearchBar value={search} onChange={setSearch} placeholder="Buscar período (Ex: 2025/1)..." />
+            <select
+              value={filterSit}
+              onChange={(e) => setFilterSit(e.target.value)}
+              className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Todas as situações</option>
+              <option value="ATIVO">Ativo</option>
+              <option value="ENCERRADO">Encerrado</option>
+              <option value="CANCELADO">Cancelado</option>
+            </select>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            Exibindo {filtered.length} de {periodosList.length} períodos
+          </span>
+        </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/30">
-                {["Período", "Data Inicial", "Data Final", "Matrículas", "Situação", "Ações"].map((h) => (
+                {["Período", "Data Inicial", "Data Final", "Matrículas Ativas", "Situação", "Ações"].map((h) => (
                   <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {DB.periodos.map((p) => {
-                const matCount = DB.matriculas.filter((m) => m.id_periodo_letivo === p.id).length;
-                return (
-                  <tr key={p.id} className="hover:bg-accent/40 transition">
-                    <td className="px-4 py-3 font-semibold">{p.periodo}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{fmtDate(p.data_inicial)}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{fmtDate(p.data_final)}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{matCount} matrícula{matCount !== 1 ? "s" : ""}</td>
-                    <td className="px-4 py-3"><Badge label={p.situacao} /></td>
-                    <td className="px-4 py-3">
-                      <button className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"><Edit2 size={13} /></button>
-                    </td>
-                  </tr>
-                );
-              })}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <EmptyState message="Nenhum período letivo encontrado." />
+                  </td>
+                </tr>
+              )}
+              {filtered.map((p) => (
+                <tr key={p.id} className="hover:bg-accent/40 transition">
+                  <td className="px-4 py-3 font-semibold text-foreground text-sm">{p.periodo}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{fmtDate(p.data_inicial)}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{fmtDate(p.data_final)}</td>
+                  <td className="px-4 py-3 text-muted-foreground">
+                    <span className="inline-flex items-center gap-1 font-medium text-foreground">
+                      <Users size={12} className="text-primary" /> {p.matCount} matrícula{p.matCount !== 1 ? "s" : ""}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3"><Badge label={p.situacao} /></td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1">
+                      <button
+                        className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"
+                        onClick={() => handleOpenEditModal(p)}
+                        title="Editar"
+                      >
+                        <Edit2 size={13} />
+                      </button>
+                      <button
+                        className="p-1 hover:bg-red-50 rounded transition text-muted-foreground hover:text-red-600"
+                        onClick={() => setConfirmDeleteId(p.id)}
+                        title="Excluir"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       </Card>
+
+      {/* MODAL NOVO / EDITAR PERÍODO LETIVO */}
       <Modal
         open={showModal}
-        title="Novo Período Letivo"
-        onClose={() => setShowModal(false)}
+        title={editingPeriodo ? `Editar Período Letivo #${editingPeriodo.id}` : "Novo Período Letivo"}
+        onClose={() => { setShowModal(false); setEditingPeriodo(null); }}
         footer={
           <>
-            <Btn variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Btn>
-            <Btn onClick={() => { setShowModal(false); showToast("Período letivo cadastrado!"); }}>Salvar</Btn>
+            <Btn variant="secondary" onClick={() => { setShowModal(false); setEditingPeriodo(null); }}>
+              Cancelar
+            </Btn>
+            <Btn onClick={handleSave}>
+              {editingPeriodo ? "Atualizar" : "Salvar"}
+            </Btn>
           </>
         }
       >
-        <div className="flex flex-col gap-3">
-          <Input label="Período" value="" onChange={() => { }} placeholder="Ex: 2025/2" required />
+        <div className="flex flex-col gap-3.5">
+          {/* IDENTIFICAÇÃO DO PERÍODO */}
+          <Input
+            label="Identificação do Período"
+            value={formData.periodo}
+            error={formErrors.periodo}
+            onChange={(val) => {
+              setFormData((prev) => ({ ...prev, periodo: val }));
+              if (formErrors.periodo) setFormErrors((prev) => ({ ...prev, periodo: "" }));
+            }}
+            placeholder="Ex: 2025/2"
+            required
+          />
+
+          {/* DATAS INICIAL E FINAL */}
           <div className="grid grid-cols-2 gap-3">
-            <Input label="Data Inicial" value="" onChange={() => { }} type="date" required />
-            <Input label="Data Final" value="" onChange={() => { }} type="date" required />
+            <Input
+              label="Data Inicial"
+              type="date"
+              value={formData.data_inicial}
+              error={formErrors.data_inicial}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, data_inicial: val }));
+                if (formErrors.data_inicial) setFormErrors((prev) => ({ ...prev, data_inicial: "" }));
+              }}
+              required
+            />
+            <Input
+              label="Data Final"
+              type="date"
+              value={formData.data_final}
+              error={formErrors.data_final}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, data_final: val }));
+                if (formErrors.data_final) setFormErrors((prev) => ({ ...prev, data_final: "" }));
+              }}
+              required
+            />
           </div>
-          <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-700 text-xs rounded-lg px-3 py-2">
-            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-            A data final não pode ser anterior à data inicial.
-          </div>
-          <Select label="Situação" value="" onChange={() => { }}
-            options={[{ value: "ATIVO", label: "Ativo" }, { value: "ENCERRADO", label: "Encerrado" }, { value: "CANCELADO", label: "Cancelado" }]} />
+
+          {/* SITUAÇÃO */}
+          <Select
+            label="Situação do Período"
+            value={formData.situacao}
+            onChange={(val) => setFormData((prev) => ({ ...prev, situacao: val }))}
+            options={[
+              { value: "ATIVO", label: "Ativo" },
+              { value: "ENCERRADO", label: "Encerrado" },
+              { value: "CANCELADO", label: "Cancelado" },
+            ]}
+            required
+          />
+
+          {/* LIVE SELECTION PREVIEW BOX */}
+          {formData.periodo && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-xs space-y-1.5 mt-1">
+              <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                <CheckCircle size={14} />
+                Resumo do Período Selecionado:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground pt-1">
+                <div>
+                  <span className="font-medium text-foreground">Período: </span>
+                  <span className="text-primary font-semibold">{formData.periodo}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Situação: </span>
+                  <Badge label={formData.situacao} />
+                </div>
+                <div className="col-span-full">
+                  <span className="font-medium text-foreground">Vigência: </span>
+                  <span className="text-foreground">
+                    {formData.data_inicial ? fmtDate(formData.data_inicial) : "—"} até {formData.data_final ? fmtDate(formData.data_final) : "—"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
+
+      {/* CONFIRM DELETE MODAL */}
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={() => confirmDeleteId && handleDelete(confirmDeleteId)}
+        title="Excluir Período Letivo"
+        message="Tem certeza de que deseja excluir este período letivo? Esta ação não pode ser desfeita."
+        confirmLabel="Sim, excluir"
+      />
     </div>
   );
 }
@@ -2039,46 +3320,195 @@ function PeriodosPage({ showToast }: { showToast: (m: string, t?: "success" | "e
 // MATRÍCULAS PAGE
 // ============================================================
 function MatriculasPage({ showToast }: { showToast: (m: string, t?: "success" | "error") => void }) {
+  const [matriculasList, setMatriculasList] = useState<Matricula[]>(() => [...DB.matriculas]);
   const [search, setSearch] = useState("");
   const [filterSit, setFilterSit] = useState("");
+  const [filterGrupo, setFilterGrupo] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [editingMatricula, setEditingMatricula] = useState<Matricula | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
-  const enriched = DB.matriculas.map((m) => ({
-    ...m,
-    aluno: DB.alunos.find((a) => a.id === m.id_aluno),
-    grupo: DB.grupos.find((g) => g.id === m.id_grupo),
-    periodo: DB.periodos.find((p) => p.id === m.id_periodo_letivo),
-  }));
+  const initialFormState = {
+    id_aluno: "",
+    id_grupo: "",
+    id_periodo_letivo: "3", // default to active period 2025/1
+    data_matricula_inicio: "2025-02-03",
+    data_matricula_final: "2025-06-30",
+    situacao: "ATIVA",
+  };
 
-  const filtered = enriched.filter((m) => {
-    const s = search.toLowerCase();
-    const match = !s || (m.aluno?.nome.toLowerCase().includes(s) ?? false) || (m.aluno?.ra.includes(s) ?? false);
-    const matchSit = !filterSit || m.situacao === filterSit;
-    return match && matchSit;
-  });
+  const [formData, setFormData] = useState(initialFormState);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const enriched = useMemo(() => {
+    return matriculasList.map((m) => ({
+      ...m,
+      aluno: DB.alunos.find((a) => a.id === m.id_aluno),
+      grupo: DB.grupos.find((g) => g.id === m.id_grupo),
+      periodo: DB.periodos.find((p) => p.id === m.id_periodo_letivo),
+    }));
+  }, [matriculasList]);
+
+  const filtered = useMemo(() => {
+    return enriched.filter((m) => {
+      const s = search.toLowerCase().trim();
+      const matchSearch =
+        !s ||
+        (m.aluno?.nome.toLowerCase().includes(s) ?? false) ||
+        (m.aluno?.ra.toLowerCase().includes(s) ?? false) ||
+        (m.grupo?.grupo.toLowerCase().includes(s) ?? false);
+      const matchSit = !filterSit || m.situacao === filterSit;
+      const matchGrupo = !filterGrupo || String(m.id_grupo) === filterGrupo;
+      return matchSearch && matchSit && matchGrupo;
+    });
+  }, [enriched, search, filterSit, filterGrupo]);
+
+  const handleOpenCreateModal = () => {
+    const activePeriod = DB.periodos.find((p) => p.id === 3) || DB.periodos[0];
+    setFormData({
+      id_aluno: "",
+      id_grupo: "",
+      id_periodo_letivo: activePeriod ? String(activePeriod.id) : "3",
+      data_matricula_inicio: activePeriod?.data_inicial || "2025-02-03",
+      data_matricula_final: activePeriod?.data_final || "2025-06-30",
+      situacao: "ATIVA",
+    });
+    setFormErrors({});
+    setEditingMatricula(null);
+    setShowModal(true);
+  };
+
+  const handleOpenEditModal = (m: typeof enriched[0]) => {
+    setFormData({
+      id_aluno: String(m.id_aluno),
+      id_grupo: String(m.id_grupo),
+      id_periodo_letivo: String(m.id_periodo_letivo),
+      data_matricula_inicio: m.data_matricula_inicio,
+      data_matricula_final: m.data_matricula_final,
+      situacao: m.situacao,
+    });
+    setFormErrors({});
+    setEditingMatricula(m);
+    setShowModal(true);
+  };
+
+  const handleSave = () => {
+    const errors: Record<string, string> = {};
+    if (!formData.id_aluno) errors.id_aluno = "Selecione o aluno";
+    if (!formData.id_grupo) errors.id_grupo = "Selecione o grupo";
+    if (!formData.id_periodo_letivo) errors.id_periodo_letivo = "Selecione o período letivo";
+    if (!formData.data_matricula_inicio) errors.data_matricula_inicio = "Informe a data de início";
+
+    // Duplicate check
+    const duplicate = DB.matriculas.find(
+      (m) =>
+        m.id_aluno === Number(formData.id_aluno) &&
+        m.id_grupo === Number(formData.id_grupo) &&
+        m.id_periodo_letivo === Number(formData.id_periodo_letivo) &&
+        (!editingMatricula || m.id !== editingMatricula.id)
+    );
+    if (duplicate) {
+      errors.id_aluno = "Este aluno já possui matrícula neste grupo e período letivo";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      showToast("Preencha todos os campos obrigatórios corretamente.", "error");
+      return;
+    }
+
+    if (editingMatricula) {
+      // Update
+      const idx = DB.matriculas.findIndex((m) => m.id === editingMatricula.id);
+      if (idx !== -1) {
+        DB.matriculas[idx] = {
+          ...DB.matriculas[idx],
+          id_aluno: Number(formData.id_aluno),
+          id_grupo: Number(formData.id_grupo),
+          id_periodo_letivo: Number(formData.id_periodo_letivo),
+          data_matricula_inicio: formData.data_matricula_inicio,
+          data_matricula_final: formData.data_matricula_final,
+          situacao: formData.situacao,
+        };
+      }
+      setMatriculasList([...DB.matriculas]);
+      setShowModal(false);
+      setEditingMatricula(null);
+      showToast("Matrícula atualizada com sucesso!");
+    } else {
+      // Create new
+      const nextId = DB.matriculas.reduce((m, mat) => Math.max(m, mat.id), 0) + 1;
+      const newMatricula: Matricula = {
+        id: nextId,
+        id_aluno: Number(formData.id_aluno),
+        id_grupo: Number(formData.id_grupo),
+        id_periodo_letivo: Number(formData.id_periodo_letivo),
+        data_matricula_inicio: formData.data_matricula_inicio,
+        data_matricula_final: formData.data_matricula_final,
+        situacao: formData.situacao || "ATIVA",
+      };
+
+      DB.matriculas.unshift(newMatricula);
+      setMatriculasList([...DB.matriculas]);
+      setShowModal(false);
+      showToast("Matrícula criada com sucesso!");
+    }
+  };
+
+  const handleDelete = (id: number) => {
+    const idx = DB.matriculas.findIndex((m) => m.id === id);
+    if (idx !== -1) {
+      DB.matriculas.splice(idx, 1);
+      setMatriculasList([...DB.matriculas]);
+      setConfirmDeleteId(null);
+      showToast("Matrícula excluída com sucesso.");
+    }
+  };
+
+  // Live preview helpers
+  const previewAluno = DB.alunos.find((a) => String(a.id) === formData.id_aluno);
+  const previewGrupo = DB.grupos.find((g) => String(g.id) === formData.id_grupo);
+  const previewPeriodo = DB.periodos.find((p) => String(p.id) === formData.id_periodo_letivo);
 
   return (
     <div>
       <Breadcrumb items={[{ label: "Gestão Acadêmica" }, { label: "Matrículas" }]} />
       <PageHeader
         title="Matrículas"
-        sub="Relacionamento aluno / grupo / período letivo"
-        action={<Btn icon={<Plus size={14} />} onClick={() => setShowModal(true)}>Nova Matrícula</Btn>}
+        sub={`${matriculasList.length} matrículas cadastradas`}
+        action={<Btn icon={<Plus size={14} />} onClick={handleOpenCreateModal}>Nova Matrícula</Btn>}
       />
+
       <Card>
-        <div className="flex flex-wrap gap-2 p-3 border-b border-border">
-          <SearchBar value={search} onChange={setSearch} placeholder="Buscar por aluno ou RA..." />
-          <select
-            value={filterSit}
-            onChange={(e) => setFilterSit(e.target.value)}
-            className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none"
-          >
-            <option value="">Todas as situações</option>
-            {["ATIVA", "ENCERRADA", "CANCELADA", "TRANCADA"].map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
+        <div className="flex flex-wrap gap-2 p-3 border-b border-border items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center">
+            <SearchBar value={search} onChange={setSearch} placeholder="Buscar por aluno, RA ou grupo..." />
+            <select
+              value={filterGrupo}
+              onChange={(e) => setFilterGrupo(e.target.value)}
+              className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Todos os grupos</option>
+              {DB.grupos.map((g) => (
+                <option key={g.id} value={String(g.id)}>{g.grupo}</option>
+              ))}
+            </select>
+            <select
+              value={filterSit}
+              onChange={(e) => setFilterSit(e.target.value)}
+              className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Todas as situações</option>
+              {["ATIVA", "ENCERRADA", "CANCELADA", "TRANCADA"].map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            Exibindo {filtered.length} de {matriculasList.length} registros
+          </span>
         </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -2089,18 +3519,49 @@ function MatriculasPage({ showToast }: { showToast: (m: string, t?: "success" | 
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {filtered.length === 0 && <tr><td colSpan={8}><EmptyState /></td></tr>}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={8}>
+                    <EmptyState message="Nenhuma matrícula encontrada." />
+                  </td>
+                </tr>
+              )}
               {filtered.map((m) => (
                 <tr key={m.id} className="hover:bg-accent/40 transition">
-                  <td className="px-4 py-3 font-medium">{m.aluno?.nome}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{m.aluno?.ra}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{m.grupo?.grupo}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{m.periodo?.periodo}</td>
+                  <td className="px-4 py-3 font-medium text-foreground">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-semibold text-xs shrink-0">
+                        {m.aluno?.nome ? m.aluno.nome.charAt(0) : "A"}
+                      </div>
+                      <div>
+                        <div>{m.aluno?.nome ?? "Aluno não encontrado"}</div>
+                        {m.aluno?.email && <div className="text-[11px] text-muted-foreground">{m.aluno.email}</div>}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{m.aluno?.ra ?? "—"}</td>
+                  <td className="px-4 py-3 font-medium">{m.grupo?.grupo ?? "—"}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{m.periodo?.periodo ?? "—"}</td>
                   <td className="px-4 py-3 text-muted-foreground">{fmtDate(m.data_matricula_inicio)}</td>
                   <td className="px-4 py-3 text-muted-foreground">{fmtDate(m.data_matricula_final)}</td>
                   <td className="px-4 py-3"><Badge label={m.situacao} /></td>
                   <td className="px-4 py-3">
-                    <button className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"><Edit2 size={13} /></button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"
+                        onClick={() => handleOpenEditModal(m)}
+                        title="Editar"
+                      >
+                        <Edit2 size={13} />
+                      </button>
+                      <button
+                        className="p-1 hover:bg-red-50 rounded transition text-muted-foreground hover:text-red-600"
+                        onClick={() => setConfirmDeleteId(m.id)}
+                        title="Excluir"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -2108,32 +3569,189 @@ function MatriculasPage({ showToast }: { showToast: (m: string, t?: "success" | 
           </table>
         </div>
       </Card>
+
+      {/* MODAL NOVA / EDITAR MATRÍCULA */}
       <Modal
         open={showModal}
-        title="Nova Matrícula"
-        onClose={() => setShowModal(false)}
+        title={editingMatricula ? `Editar Matrícula #${editingMatricula.id}` : "Nova Matrícula"}
+        onClose={() => { setShowModal(false); setEditingMatricula(null); }}
         footer={
           <>
-            <Btn variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Btn>
-            <Btn onClick={() => { setShowModal(false); showToast("Matrícula criada com sucesso!"); }}>Salvar</Btn>
+            <Btn variant="secondary" onClick={() => { setShowModal(false); setEditingMatricula(null); }}>
+              Cancelar
+            </Btn>
+            <Btn onClick={handleSave}>
+              {editingMatricula ? "Atualizar" : "Salvar"}
+            </Btn>
           </>
         }
       >
-        <div className="flex flex-col gap-3">
-          <Select label="Aluno" value="" onChange={() => { }}
-            options={DB.alunos.map((a) => ({ value: String(a.id), label: `${a.nome} (RA ${a.ra})` }))} required />
-          <Select label="Grupo" value="" onChange={() => { }}
-            options={DB.grupos.filter((g) => g.situacao === "ATIVO").map((g) => ({ value: String(g.id), label: g.grupo }))} required />
-          <Select label="Período Letivo" value="" onChange={() => { }}
-            options={DB.periodos.filter((p) => p.situacao === "ATIVO").map((p) => ({ value: String(p.id), label: p.periodo }))} required />
-          <div className="grid grid-cols-2 gap-3">
-            <Input label="Data de Início" value="" onChange={() => { }} type="date" required />
-            <Input label="Data de Término" value="" onChange={() => { }} type="date" />
+        <div className="flex flex-col gap-3.5">
+          {/* ALUNO */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+              Aluno <span className="text-red-500">*</span>
+            </p>
+            <Select
+              label="Selecionar Aluno"
+              value={formData.id_aluno}
+              error={formErrors.id_aluno}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, id_aluno: val }));
+                if (formErrors.id_aluno) setFormErrors((prev) => ({ ...prev, id_aluno: "" }));
+              }}
+              options={DB.alunos.map((a) => ({
+                value: String(a.id),
+                label: `${a.nome} (RA ${a.ra}) - ${a.situacao}`,
+              }))}
+              required
+            />
           </div>
-          <Select label="Situação" value="" onChange={() => { }}
-            options={["ATIVA", "ENCERRADA", "CANCELADA", "TRANCADA"].map((s) => ({ value: s, label: s }))} />
+
+          {/* GRUPO & PERÍODO */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Grupo <span className="text-red-500">*</span>
+              </p>
+              <Select
+                label="Grupo"
+                value={formData.id_grupo}
+                error={formErrors.id_grupo}
+                onChange={(val) => {
+                  setFormData((prev) => ({ ...prev, id_grupo: val }));
+                  if (formErrors.id_grupo) setFormErrors((prev) => ({ ...prev, id_grupo: "" }));
+                }}
+                options={DB.grupos
+                  .filter((g) => g.situacao === "ATIVO")
+                  .map((g) => ({ value: String(g.id), label: g.grupo }))}
+                required
+              />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Período Letivo <span className="text-red-500">*</span>
+              </p>
+              <Select
+                label="Período Letivo"
+                value={formData.id_periodo_letivo}
+                error={formErrors.id_periodo_letivo}
+                onChange={(val) => {
+                  const p = DB.periodos.find((per) => String(per.id) === val);
+                  setFormData((prev) => ({
+                    ...prev,
+                    id_periodo_letivo: val,
+                    data_matricula_inicio: p?.data_inicial || prev.data_matricula_inicio,
+                    data_matricula_final: p?.data_final || prev.data_matricula_final,
+                  }));
+                  if (formErrors.id_periodo_letivo) setFormErrors((prev) => ({ ...prev, id_periodo_letivo: "" }));
+                }}
+                options={DB.periodos
+                  .filter((p) => p.situacao === "ATIVO")
+                  .map((p) => ({ value: String(p.id), label: p.periodo }))}
+                required
+              />
+            </div>
+          </div>
+
+          {/* DATAS */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+              Vigência da Matrícula
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Data de Início"
+                type="date"
+                value={formData.data_matricula_inicio}
+                error={formErrors.data_matricula_inicio}
+                onChange={(val) => {
+                  setFormData((prev) => ({ ...prev, data_matricula_inicio: val }));
+                  if (formErrors.data_matricula_inicio) setFormErrors((prev) => ({ ...prev, data_matricula_inicio: "" }));
+                }}
+                required
+              />
+              <Input
+                label="Data de Término"
+                type="date"
+                value={formData.data_matricula_final}
+                onChange={(val) => setFormData((prev) => ({ ...prev, data_matricula_final: val }))}
+              />
+            </div>
+          </div>
+
+          {/* SITUAÇÃO */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+              Situação da Matrícula
+            </p>
+            <Select
+              label="Situação"
+              value={formData.situacao}
+              onChange={(val) => setFormData((prev) => ({ ...prev, situacao: val }))}
+              options={["ATIVA", "ENCERRADA", "CANCELADA", "TRANCADA"].map((s) => ({ value: s, label: s }))}
+            />
+          </div>
+
+          {/* LIVE SELECTION PREVIEW BOX */}
+          {(previewAluno || previewGrupo || previewPeriodo) && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-xs space-y-1.5 mt-1">
+              <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                <CheckCircle size={14} />
+                Resumo da Matrícula Selecionada:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground pt-1">
+                <div>
+                  <span className="font-medium text-foreground">Aluno: </span>
+                  {previewAluno ? (
+                    <span className="text-primary font-semibold">
+                      {previewAluno.nome} ({previewAluno.ra})
+                    </span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não selecionado</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Grupo: </span>
+                  {previewGrupo ? (
+                    <span className="text-foreground font-medium">{previewGrupo.grupo}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não selecionado</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Período: </span>
+                  {previewPeriodo ? (
+                    <span className="text-foreground">{previewPeriodo.periodo}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não selecionado</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Situação: </span>
+                  <Badge label={formData.situacao} />
+                </div>
+                <div className="col-span-full">
+                  <span className="font-medium text-foreground">Vigência: </span>
+                  <span className="text-foreground">
+                    {fmtDate(formData.data_matricula_inicio)} até {fmtDate(formData.data_matricula_final)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
+
+      {/* CONFIRM DELETE MODAL */}
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={() => confirmDeleteId && handleDelete(confirmDeleteId)}
+        title="Excluir Matrícula"
+        message="Tem certeza de que deseja excluir esta matrícula? Esta ação não pode ser desfeita."
+        confirmLabel="Sim, excluir"
+      />
     </div>
   );
 }
@@ -2147,34 +3765,294 @@ function AtendimentosPage({ onNav, showToast }: {
 }) {
   const [viewMode, setViewMode] = useState<"lista" | "calendario">("lista");
   const [filterSit, setFilterSit] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [selectedMonth, setSelectedMonth] = useState("2025-02");
+  const [atendimentosList, setAtendimentosList] = useState<Atendimento[]>(() => [...DB.atendimentos]);
   const [showModal, setShowModal] = useState(false);
+  const [editingAtendimento, setEditingAtendimento] = useState<Atendimento | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
-  const enriched = DB.atendimentos.map((a) => {
-    const pac = DB.pacientes.find((p) => p.id === a.id_paciente);
-    const profRel = DB.professores_atendimentos.find((pa) => pa.id_atendimento === a.id);
-    const prof = profRel ? DB.professores.find((p) => p.id === profRel.id_professor) : null;
-    const clinRel = DB.atendimentos_clinicas.find((ac) => ac.id_atendimento === a.id);
-    const clin = clinRel ? DB.clinicas.find((c) => c.id === clinRel.id_clinica) : null;
-    const matRel = DB.matricula_atendimentos.find((ma) => ma.id_atendimento === a.id);
-    const mat = matRel ? DB.matriculas.find((m) => m.id === matRel.id_matricula) : null;
-    const aluno = mat ? DB.alunos.find((al) => al.id === mat.id_aluno) : null;
-    return { ...a, pac, prof, clin, aluno };
+  const initialFormState = {
+    id_paciente: "",
+    data: "2025-02-20",
+    horario: "09:00",
+    id_professor: "",
+    id_matricula: "",
+    id_clinica: "",
+    situacao: "AGENDADO",
+    observacoes: "",
+  };
+
+  const [formData, setFormData] = useState(initialFormState);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const enriched = useMemo(() => {
+    return atendimentosList.map((a) => {
+      const pac = DB.pacientes.find((p) => p.id === a.id_paciente);
+      const profRel = DB.professores_atendimentos.find((pa) => pa.id_atendimento === a.id);
+      const prof = profRel ? DB.professores.find((p) => p.id === profRel.id_professor) : null;
+      const clinRel = DB.atendimentos_clinicas.find((ac) => ac.id_atendimento === a.id);
+      const clin = clinRel ? DB.clinicas.find((c) => c.id === clinRel.id_clinica) : null;
+      const matRel = DB.matricula_atendimentos.find((ma) => ma.id_atendimento === a.id);
+      const mat = matRel ? DB.matriculas.find((m) => m.id === matRel.id_matricula) : null;
+      const aluno = mat ? DB.alunos.find((al) => al.id === mat.id_aluno) : null;
+      return { ...a, pac, prof, clin, aluno, profRel, clinRel, matRel };
+    });
+  }, [atendimentosList]);
+
+  const filtered = useMemo(() => {
+    return enriched.filter((a) => {
+      const matchSit = !filterSit || a.situacao === filterSit;
+      const s = searchTerm.toLowerCase().trim();
+      const matchSearch = !s ||
+        (a.pac?.nome_completo && a.pac.nome_completo.toLowerCase().includes(s)) ||
+        (a.pac?.cod_prontuario && a.pac.cod_prontuario.toLowerCase().includes(s)) ||
+        (a.prof?.nome_completo && a.prof.nome_completo.toLowerCase().includes(s)) ||
+        (a.aluno?.nome && a.aluno.nome.toLowerCase().includes(s)) ||
+        (a.clin?.clinica && a.clin.clinica.toLowerCase().includes(s)) ||
+        a.data_hora_agendada.includes(s);
+      return matchSit && matchSearch;
+    });
+  }, [enriched, filterSit, searchTerm]);
+
+  // Calendar calculations
+  const [yearStr, monthStr] = selectedMonth.split("-");
+  const year = parseInt(yearStr || "2025", 10);
+  const month = parseInt(monthStr || "02", 10);
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const daysArray = Array.from({ length: daysInMonth }, (_, i) => String(i + 1).padStart(2, "0"));
+
+  const calDays = daysArray.map((d) => {
+    const datePrefix = `${selectedMonth}-${d}`;
+    const dayOfWeekIdx = new Date(year, month - 1, parseInt(d, 10)).getDay();
+    const weekdays = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+    return {
+      date: d,
+      fullDate: datePrefix,
+      weekday: weekdays[dayOfWeekIdx],
+      atends: enriched.filter((a) => a.data_hora_agendada.startsWith(datePrefix)),
+    };
   });
 
-  const filtered = enriched.filter((a) => !filterSit || a.situacao === filterSit);
+  const monthLabel = useMemo(() => {
+    const date = new Date(year, month - 1, 1);
+    const m = date.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+    return m.charAt(0).toUpperCase() + m.slice(1);
+  }, [year, month]);
 
-  const days = ["20", "21", "22", "23", "24", "25", "26", "27", "28"];
-  const calDays = days.map((d) => ({
-    date: d,
-    atends: enriched.filter((a) => a.data_hora_agendada.startsWith(`2025-02-${d}`)),
-  }));
+  const handlePrevMonth = () => {
+    let newM = month - 1;
+    let newY = year;
+    if (newM < 1) {
+      newM = 12;
+      newY -= 1;
+    }
+    setSelectedMonth(`${newY}-${String(newM).padStart(2, "0")}`);
+  };
+
+  const handleNextMonth = () => {
+    let newM = month + 1;
+    let newY = year;
+    if (newM > 12) {
+      newM = 1;
+      newY += 1;
+    }
+    setSelectedMonth(`${newY}-${String(newM).padStart(2, "0")}`);
+  };
+
+  const handleOpenCreateModal = (prefillDate?: string) => {
+    setFormData({
+      id_paciente: "",
+      data: prefillDate || `${selectedMonth}-20`,
+      horario: "09:00",
+      id_professor: "",
+      id_matricula: "",
+      id_clinica: "",
+      situacao: "AGENDADO",
+      observacoes: "",
+    });
+    setFormErrors({});
+    setEditingAtendimento(null);
+    setShowModal(true);
+  };
+
+  const handleOpenEditModal = (atend: typeof enriched[0]) => {
+    const [d, t] = atend.data_hora_agendada.split(" ");
+    setFormData({
+      id_paciente: String(atend.id_paciente),
+      data: d || `${selectedMonth}-20`,
+      horario: t || "09:00",
+      id_professor: atend.profRel ? String(atend.profRel.id_professor) : "",
+      id_matricula: atend.matRel ? String(atend.matRel.id_matricula) : "",
+      id_clinica: atend.clinRel ? String(atend.clinRel.id_clinica) : "",
+      situacao: atend.situacao || "AGENDADO",
+      observacoes: atend.profRel?.observacoes || atend.clinRel?.observacoes || atend.matRel?.observacoes || "",
+    });
+    setFormErrors({});
+    setEditingAtendimento(atend);
+    setShowModal(true);
+  };
+
+  const handleSave = () => {
+    const errors: Record<string, string> = {};
+    if (!formData.id_paciente) errors.id_paciente = "Selecione o paciente";
+    if (!formData.data) errors.data = "Informe a data";
+    if (!formData.horario) errors.horario = "Informe o horário";
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      showToast("Preencha todos os campos obrigatórios.", "error");
+      return;
+    }
+
+    const dataHora = `${formData.data} ${formData.horario}`;
+
+    if (editingAtendimento) {
+      // Update existing
+      const targetId = editingAtendimento.id;
+      const idx = DB.atendimentos.findIndex((a) => a.id === targetId);
+      if (idx !== -1) {
+        DB.atendimentos[idx] = {
+          ...DB.atendimentos[idx],
+          id_paciente: Number(formData.id_paciente),
+          data_hora_agendada: dataHora,
+          situacao: formData.situacao,
+          data_hora_atendimento: formData.situacao === "REALIZADO" ? (DB.atendimentos[idx].data_hora_atendimento || dataHora) : DB.atendimentos[idx].data_hora_atendimento,
+        };
+      }
+
+      // Update professor rel
+      const profRelIdx = DB.professores_atendimentos.findIndex((p) => p.id_atendimento === targetId);
+      if (formData.id_professor) {
+        if (profRelIdx !== -1) {
+          DB.professores_atendimentos[profRelIdx].id_professor = Number(formData.id_professor);
+          DB.professores_atendimentos[profRelIdx].observacoes = formData.observacoes;
+        } else {
+          const nextProfId = DB.professores_atendimentos.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+          DB.professores_atendimentos.push({ id: nextProfId, id_professor: Number(formData.id_professor), id_atendimento: targetId, observacoes: formData.observacoes });
+        }
+      } else if (profRelIdx !== -1) {
+        DB.professores_atendimentos.splice(profRelIdx, 1);
+      }
+
+      // Update clinica rel
+      const clinRelIdx = DB.atendimentos_clinicas.findIndex((c) => c.id_atendimento === targetId);
+      if (formData.id_clinica) {
+        if (clinRelIdx !== -1) {
+          DB.atendimentos_clinicas[clinRelIdx].id_clinica = Number(formData.id_clinica);
+          DB.atendimentos_clinicas[clinRelIdx].observacoes = formData.observacoes;
+        } else {
+          const nextClinId = DB.atendimentos_clinicas.reduce((m, c) => Math.max(m, c.id), 0) + 1;
+          DB.atendimentos_clinicas.push({ id: nextClinId, id_clinica: Number(formData.id_clinica), id_atendimento: targetId, observacoes: formData.observacoes });
+        }
+      } else if (clinRelIdx !== -1) {
+        DB.atendimentos_clinicas.splice(clinRelIdx, 1);
+      }
+
+      // Update matricula rel
+      const matRelIdx = DB.matricula_atendimentos.findIndex((m) => m.id_atendimento === targetId);
+      if (formData.id_matricula) {
+        if (matRelIdx !== -1) {
+          DB.matricula_atendimentos[matRelIdx].id_matricula = Number(formData.id_matricula);
+          DB.matricula_atendimentos[matRelIdx].observacoes = formData.observacoes;
+        } else {
+          const nextMatId = DB.matricula_atendimentos.reduce((m, ma) => Math.max(m, ma.id), 0) + 1;
+          DB.matricula_atendimentos.push({ id: nextMatId, id_matricula: Number(formData.id_matricula), id_atendimento: targetId, observacoes: formData.observacoes });
+        }
+      } else if (matRelIdx !== -1) {
+        DB.matricula_atendimentos.splice(matRelIdx, 1);
+      }
+
+      setAtendimentosList([...DB.atendimentos]);
+      setShowModal(false);
+      setEditingAtendimento(null);
+      showToast("Atendimento atualizado com sucesso!");
+    } else {
+      // Create new
+      const nextId = DB.atendimentos.reduce((m, a) => Math.max(m, a.id), 0) + 1;
+      const newAtend: Atendimento = {
+        id: nextId,
+        id_paciente: Number(formData.id_paciente),
+        data_hora_agendada: dataHora,
+        data_hora_atendimento: formData.situacao === "REALIZADO" ? dataHora : null,
+        situacao: formData.situacao || "AGENDADO",
+      };
+
+      DB.atendimentos.unshift(newAtend);
+
+      if (formData.id_professor) {
+        const nextProfId = DB.professores_atendimentos.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+        DB.professores_atendimentos.push({
+          id: nextProfId,
+          id_professor: Number(formData.id_professor),
+          id_atendimento: nextId,
+          observacoes: formData.observacoes || "",
+        });
+      }
+
+      if (formData.id_matricula) {
+        const nextMatId = DB.matricula_atendimentos.reduce((m, ma) => Math.max(m, ma.id), 0) + 1;
+        DB.matricula_atendimentos.push({
+          id: nextMatId,
+          id_matricula: Number(formData.id_matricula),
+          id_atendimento: nextId,
+          observacoes: formData.observacoes || "",
+        });
+      }
+
+      if (formData.id_clinica) {
+        const nextClinId = DB.atendimentos_clinicas.reduce((m, c) => Math.max(m, c.id), 0) + 1;
+        DB.atendimentos_clinicas.push({
+          id: nextClinId,
+          id_clinica: Number(formData.id_clinica),
+          id_atendimento: nextId,
+          observacoes: formData.observacoes || "",
+        });
+      }
+
+      setAtendimentosList([...DB.atendimentos]);
+
+      // Switch calendar view to month of created appointment if valid
+      if (formData.data && formData.data.length >= 7) {
+        setSelectedMonth(formData.data.substring(0, 7));
+      }
+
+      setShowModal(false);
+      showToast("Atendimento agendado com sucesso!");
+    }
+  };
+
+  const handleDelete = (id: number) => {
+    const idx = DB.atendimentos.findIndex(a => a.id === id);
+    if (idx !== -1) {
+      DB.atendimentos.splice(idx, 1);
+      const profIdx = DB.professores_atendimentos.findIndex(p => p.id_atendimento === id);
+      if (profIdx !== -1) DB.professores_atendimentos.splice(profIdx, 1);
+      const clinIdx = DB.atendimentos_clinicas.findIndex(c => c.id_atendimento === id);
+      if (clinIdx !== -1) DB.atendimentos_clinicas.splice(clinIdx, 1);
+      const matIdx = DB.matricula_atendimentos.findIndex(m => m.id_atendimento === id);
+      if (matIdx !== -1) DB.matricula_atendimentos.splice(matIdx, 1);
+
+      setAtendimentosList([...DB.atendimentos]);
+      setConfirmDeleteId(null);
+      showToast("Atendimento excluído com sucesso.");
+    }
+  };
+
+  // Live Preview Selections
+  const previewPac = DB.pacientes.find((p) => String(p.id) === formData.id_paciente);
+  const previewProf = DB.professores.find((p) => String(p.id) === formData.id_professor);
+  const previewMat = DB.matriculas.find((m) => String(m.id) === formData.id_matricula);
+  const previewAluno = previewMat ? DB.alunos.find((a) => a.id === previewMat.id_aluno) : null;
+  const previewGrupo = previewMat ? DB.grupos.find((g) => g.id === previewMat.id_grupo) : null;
+  const previewClin = DB.clinicas.find((c) => String(c.id) === formData.id_clinica);
 
   return (
     <div>
       <Breadcrumb items={[{ label: "Principal" }, { label: "Atendimentos" }]} />
       <PageHeader
         title="Agenda de Atendimentos"
-        sub="Fevereiro de 2025"
+        sub={`${enriched.length} atendimentos registrados • ${monthLabel}`}
         action={
           <div className="flex items-center gap-2">
             <div className="flex border border-border rounded-lg overflow-hidden">
@@ -2191,25 +4069,36 @@ function AtendimentosPage({ onNav, showToast }: {
                 Calendário
               </button>
             </div>
-            <Btn icon={<Plus size={14} />} onClick={() => setShowModal(true)}>Novo Atendimento</Btn>
+            <Btn icon={<Plus size={14} />} onClick={() => handleOpenCreateModal()}>Novo Atendimento</Btn>
           </div>
         }
       />
 
       {viewMode === "lista" ? (
         <Card>
-          <div className="flex flex-wrap gap-2 p-3 border-b border-border">
-            <select
-              value={filterSit}
-              onChange={(e) => setFilterSit(e.target.value)}
-              className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none"
-            >
-              <option value="">Todas as situações</option>
-              {["AGENDADO", "REALIZADO", "CANCELADO", "FALTOU", "REMARCADO"].map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
+          <div className="flex flex-wrap gap-2 p-3 border-b border-border items-center justify-between">
+            <div className="flex flex-wrap gap-2 items-center">
+              <SearchBar
+                value={searchTerm}
+                onChange={setSearchTerm}
+                placeholder="Buscar por paciente, professor, aluno..."
+              />
+              <select
+                value={filterSit}
+                onChange={(e) => setFilterSit(e.target.value)}
+                className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+              >
+                <option value="">Todas as situações</option>
+                {["AGENDADO", "REALIZADO", "CANCELADO", "FALTOU", "REMARCADO"].map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+            <span className="text-xs text-muted-foreground">
+              Exibindo {filtered.length} de {enriched.length} registros
+            </span>
           </div>
+
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -2220,21 +4109,48 @@ function AtendimentosPage({ onNav, showToast }: {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={7}>
+                      <EmptyState message="Nenhum atendimento encontrado." />
+                    </td>
+                  </tr>
+                )}
                 {filtered.map((a) => (
                   <tr key={a.id} className="hover:bg-accent/40 transition cursor-pointer" onClick={() => onNav("atendimento-detalhe", a.id)}>
-                    <td className="px-4 py-3 font-medium text-sm">{fmtDatetime(a.data_hora_agendada)}</td>
-                    <td className="px-4 py-3">{a.pac?.nome_completo}</td>
+                    <td className="px-4 py-3 font-medium text-sm whitespace-nowrap">{fmtDatetime(a.data_hora_agendada)}</td>
+                    <td className="px-4 py-3 font-medium text-foreground">
+                      <div>{a.pac?.nome_completo ?? "Paciente não vinculado"}</div>
+                      {a.pac?.cod_prontuario && (
+                        <div className="text-[11px] font-mono text-muted-foreground">{a.pac.cod_prontuario}</div>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-muted-foreground">{a.prof?.nome_completo ?? "—"}</td>
                     <td className="px-4 py-3 text-muted-foreground">{a.aluno?.nome ?? "—"}</td>
                     <td className="px-4 py-3 text-muted-foreground">{a.clin?.clinica ?? "—"}</td>
                     <td className="px-4 py-3"><Badge label={a.situacao} /></td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                        <button className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-primary" onClick={() => onNav("atendimento-detalhe", a.id)}>
-                          <Eye size={13} />
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-1">
+                        <button
+                          className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-primary"
+                          onClick={() => onNav("atendimento-detalhe", a.id)}
+                          title="Ver detalhes"
+                        >
+                          <Eye size={14} />
                         </button>
-                        <button className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground">
-                          <Edit2 size={13} />
+                        <button
+                          className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"
+                          onClick={() => handleOpenEditModal(a)}
+                          title="Editar"
+                        >
+                          <Edit2 size={14} />
+                        </button>
+                        <button
+                          className="p-1 hover:bg-red-50 rounded transition text-muted-foreground hover:text-red-600"
+                          onClick={() => setConfirmDeleteId(a.id)}
+                          title="Excluir"
+                        >
+                          <Trash2 size={14} />
                         </button>
                       </div>
                     </td>
@@ -2245,74 +4161,328 @@ function AtendimentosPage({ onNav, showToast }: {
           </div>
         </Card>
       ) : (
-        <div className="grid grid-cols-3 lg:grid-cols-5 gap-3">
-          {calDays.map((day) => (
-            <div key={day.date} className="bg-card rounded-xl border border-border p-3 min-h-28">
-              <p className="text-sm font-semibold text-foreground mb-2">
-                {day.date}/02
-              </p>
-              {day.atends.length === 0 ? (
-                <p className="text-[11px] text-muted-foreground">—</p>
-              ) : (
-                <div className="flex flex-col gap-1.5">
-                  {day.atends.map((a) => (
-                    <button
-                      key={a.id}
-                      onClick={() => onNav("atendimento-detalhe", a.id)}
-                      className={`w-full text-left p-1.5 rounded text-[11px] font-medium leading-tight transition hover:opacity-80
-                        ${a.situacao === "REALIZADO" ? "bg-emerald-100 text-emerald-800"
-                          : a.situacao === "CANCELADO" ? "bg-red-100 text-red-800"
-                            : a.situacao === "FALTOU" ? "bg-amber-100 text-amber-800"
-                              : a.situacao === "REMARCADO" ? "bg-violet-100 text-violet-800"
-                                : "bg-blue-100 text-blue-800"}`}
-                    >
-                      {a.data_hora_agendada.split(" ")[1]} — {a.pac?.nome_completo.split(" ")[0]}
-                    </button>
-                  ))}
-                </div>
-              )}
+        <div className="space-y-4">
+          {/* Calendar Month Navigation Header */}
+          <div className="flex items-center justify-between bg-card p-3 rounded-xl border border-border">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handlePrevMonth}
+                className="p-1.5 hover:bg-accent rounded-lg border border-border transition text-muted-foreground hover:text-foreground"
+                title="Mês anterior"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <h2 className="text-sm font-semibold text-foreground min-w-36 text-center">
+                {monthLabel}
+              </h2>
+              <button
+                onClick={handleNextMonth}
+                className="p-1.5 hover:bg-accent rounded-lg border border-border transition text-muted-foreground hover:text-foreground"
+                title="Próximo mês"
+              >
+                <ChevronRight size={16} />
+              </button>
             </div>
-          ))}
+
+            <div className="flex items-center gap-2">
+              <select
+                value={filterSit}
+                onChange={(e) => setFilterSit(e.target.value)}
+                className="border border-border rounded px-2.5 py-1 text-xs bg-card focus:outline-none"
+              >
+                <option value="">Todas as situações</option>
+                {["AGENDADO", "REALIZADO", "CANCELADO", "FALTOU", "REMARCADO"].map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              <Btn
+                size="sm"
+                variant="secondary"
+                onClick={() => setSelectedMonth("2025-02")}
+              >
+                Fev/2025
+              </Btn>
+            </div>
+          </div>
+
+          {/* Calendar Days Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3">
+            {calDays.map((day) => {
+              const hasAtends = day.atends.length > 0;
+              return (
+                <div
+                  key={day.fullDate}
+                  className={`bg-card rounded-xl border p-3 min-h-32 flex flex-col transition-all ${hasAtends ? "border-primary/40 shadow-sm" : "border-border/80"}`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-sm font-bold text-foreground">{day.date}</span>
+                      <span className="text-[11px] font-medium text-muted-foreground">/{String(month).padStart(2, "0")}</span>
+                      <span className="text-[10px] text-muted-foreground ml-1">({day.weekday})</span>
+                    </div>
+                    <button
+                      onClick={() => handleOpenCreateModal(day.fullDate)}
+                      className="p-1 hover:bg-primary/10 hover:text-primary rounded text-muted-foreground transition"
+                      title={`Agendar para ${day.date}/${String(month).padStart(2, "0")}`}
+                    >
+                      <Plus size={13} />
+                    </button>
+                  </div>
+
+                  {day.atends.length === 0 ? (
+                    <div className="flex-1 flex items-center justify-center">
+                      <span className="text-[11px] text-muted-foreground/60">Sem consultas</span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-1.5 flex-1">
+                      {day.atends.map((a) => {
+                        const [, time] = a.data_hora_agendada.split(" ");
+                        const pacFirst = a.pac?.nome_completo.split(" ")[0] ?? "Paciente";
+                        return (
+                          <button
+                            key={a.id}
+                            onClick={() => onNav("atendimento-detalhe", a.id)}
+                            className={`w-full text-left p-1.5 rounded text-[11px] font-medium leading-tight transition hover:opacity-85 shadow-xs border
+                              ${a.situacao === "REALIZADO" ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                                : a.situacao === "CANCELADO" ? "bg-red-50 text-red-800 border-red-200"
+                                  : a.situacao === "FALTOU" ? "bg-amber-50 text-amber-800 border-amber-200"
+                                    : a.situacao === "REMARCADO" ? "bg-violet-50 text-violet-800 border-violet-200"
+                                      : "bg-blue-50 text-blue-800 border-blue-200"}`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-semibold">{time}</span>
+                              <span className="text-[9px] uppercase font-bold tracking-tight opacity-75">{a.situacao}</span>
+                            </div>
+                            <div className="truncate mt-0.5">{pacFirst}</div>
+                            {a.clin && (
+                              <div className="text-[9px] text-muted-foreground truncate">{a.clin.clinica}</div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
+      {/* MODAL NOVO / EDITAR ATENDIMENTO */}
       <Modal
         open={showModal}
-        title="Novo Atendimento"
-        onClose={() => setShowModal(false)}
+        title={editingAtendimento ? `Editar Atendimento #${editingAtendimento.id}` : "Novo Atendimento"}
+        onClose={() => { setShowModal(false); setEditingAtendimento(null); }}
         footer={
           <>
-            <Btn variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Btn>
-            <Btn onClick={() => { setShowModal(false); showToast("Atendimento agendado com sucesso!"); }}>Salvar</Btn>
+            <Btn variant="secondary" onClick={() => { setShowModal(false); setEditingAtendimento(null); }}>
+              Cancelar
+            </Btn>
+            <Btn onClick={handleSave}>
+              {editingAtendimento ? "Atualizar" : "Salvar"}
+            </Btn>
           </>
         }
       >
-        <div className="flex flex-col gap-3">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Paciente</p>
-          <Select label="Selecionar paciente" value="" onChange={() => { }}
-            options={DB.pacientes.map((p) => ({ value: String(p.id), label: `${p.nome_completo} (${p.cod_prontuario})` }))} required />
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-1">Data e Horário</p>
-          <div className="grid grid-cols-2 gap-3">
-            <Input label="Data" value="" onChange={() => { }} type="date" required />
-            <Input label="Horário" value="" onChange={() => { }} type="time" required />
+        <div className="flex flex-col gap-3.5">
+          {/* PACIENTE */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+              Paciente <span className="text-red-500">*</span>
+            </p>
+            <Select
+              label="Selecionar Paciente"
+              value={formData.id_paciente}
+              error={formErrors.id_paciente}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, id_paciente: val }));
+                if (formErrors.id_paciente) setFormErrors((prev) => ({ ...prev, id_paciente: "" }));
+              }}
+              options={DB.pacientes.map((p) => ({
+                value: String(p.id),
+                label: `${p.nome_completo} (${p.cod_prontuario}) - CPF: ${p.cpf}`,
+              }))}
+              required
+            />
           </div>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-1">Professor</p>
-          <Select label="Selecionar professor" value="" onChange={() => { }}
-            options={DB.professores.filter((p) => p.situacao === "ATIVO").map((p) => ({ value: String(p.id), label: p.nome_completo }))} />
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-1">Matrícula</p>
-          <Select label="Selecionar matrícula" value="" onChange={() => { }}
-            options={DB.matriculas.filter((m) => m.situacao === "ATIVA").map((m) => {
-              const al = DB.alunos.find((a) => a.id === m.id_aluno);
-              const g = DB.grupos.find((g) => g.id === m.id_grupo);
-              return { value: String(m.id), label: `${al?.nome} — ${g?.grupo}` };
-            })} />
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-1">Clínica</p>
-          <Select label="Selecionar clínica" value="" onChange={() => { }}
-            options={DB.clinicas.filter((c) => c.situacao === "ATIVO").map((c) => ({ value: String(c.id), label: c.clinica }))} />
-          <Select label="Situação" value="" onChange={() => { }}
-            options={["AGENDADO", "REALIZADO", "CANCELADO", "FALTOU", "REMARCADO"].map((s) => ({ value: s, label: s }))} />
+
+          {/* DATA E HORÁRIO */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+              Data e Horário <span className="text-red-500">*</span>
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Data"
+                type="date"
+                value={formData.data}
+                error={formErrors.data}
+                onChange={(val) => {
+                  setFormData((prev) => ({ ...prev, data: val }));
+                  if (formErrors.data) setFormErrors((prev) => ({ ...prev, data: "" }));
+                }}
+                required
+              />
+              <Input
+                label="Horário"
+                type="time"
+                value={formData.horario}
+                error={formErrors.horario}
+                onChange={(val) => {
+                  setFormData((prev) => ({ ...prev, horario: val }));
+                  if (formErrors.horario) setFormErrors((prev) => ({ ...prev, horario: "" }));
+                }}
+                required
+              />
+            </div>
+          </div>
+
+          {/* PROFESSOR */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+              Professor Responsável
+            </p>
+            <Select
+              label="Selecionar Professor"
+              value={formData.id_professor}
+              onChange={(val) => setFormData((prev) => ({ ...prev, id_professor: val }))}
+              options={DB.professores
+                .filter((p) => p.situacao === "ATIVO")
+                .map((p) => ({ value: String(p.id), label: p.nome_completo }))}
+            />
+          </div>
+
+          {/* MATRÍCULA / ALUNO */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+              Aluno / Matrícula
+            </p>
+            <Select
+              label="Selecionar Matrícula"
+              value={formData.id_matricula}
+              onChange={(val) => setFormData((prev) => ({ ...prev, id_matricula: val }))}
+              options={DB.matriculas
+                .filter((m) => m.situacao === "ATIVA")
+                .map((m) => {
+                  const al = DB.alunos.find((a) => a.id === m.id_aluno);
+                  const g = DB.grupos.find((g) => g.id === m.id_grupo);
+                  return {
+                    value: String(m.id),
+                    label: `${al?.nome ?? "Aluno"} — ${g?.grupo ?? "Sem grupo"} (RA: ${al?.ra ?? "—"})`,
+                  };
+                })}
+            />
+          </div>
+
+          {/* CLÍNICA & SITUAÇÃO */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Clínica
+              </p>
+              <Select
+                label="Selecionar Clínica"
+                value={formData.id_clinica}
+                onChange={(val) => setFormData((prev) => ({ ...prev, id_clinica: val }))}
+                options={DB.clinicas
+                  .filter((c) => c.situacao === "ATIVO")
+                  .map((c) => ({ value: String(c.id), label: c.clinica }))}
+              />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Situação
+              </p>
+              <Select
+                label="Situação do Atendimento"
+                value={formData.situacao}
+                onChange={(val) => setFormData((prev) => ({ ...prev, situacao: val }))}
+                options={["AGENDADO", "REALIZADO", "CANCELADO", "FALTOU", "REMARCADO"].map((s) => ({
+                  value: s,
+                  label: s,
+                }))}
+              />
+            </div>
+          </div>
+
+          {/* OBSERVAÇÕES */}
+          <Input
+            label="Observações (opcional)"
+            value={formData.observacoes}
+            onChange={(val) => setFormData((prev) => ({ ...prev, observacoes: val }))}
+            placeholder="Anotações sobre a sessão, recomendações..."
+          />
+
+          {/* LIVE SELECTION PREVIEW BOX */}
+          {(previewPac || formData.data || formData.horario || previewProf || previewClin || previewAluno) && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-xs space-y-1.5 mt-1">
+              <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                <CheckCircle size={14} />
+                Resumo do Agendamento Selecionado:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground pt-1">
+                <div>
+                  <span className="font-medium text-foreground">Paciente: </span>
+                  {previewPac ? (
+                    <span className="text-primary font-semibold">
+                      {previewPac.nome_completo} ({previewPac.cod_prontuario})
+                    </span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não selecionado</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Data/Hora: </span>
+                  {formData.data || formData.horario ? (
+                    <span className="text-foreground font-medium">
+                      {formData.data ? fmtDate(formData.data) : "—"} {formData.horario ? `às ${formData.horario}` : ""}
+                    </span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não definido</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Professor: </span>
+                  {previewProf ? (
+                    <span className="text-foreground">{previewProf.nome_completo}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não vinculado</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Clínica: </span>
+                  {previewClin ? (
+                    <span className="text-foreground">{previewClin.clinica}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não vinculada</span>
+                  )}
+                </div>
+                {previewAluno && (
+                  <div className="col-span-full">
+                    <span className="font-medium text-foreground">Aluno: </span>
+                    <span className="text-foreground">{previewAluno.nome} ({previewGrupo?.grupo})</span>
+                  </div>
+                )}
+                <div>
+                  <span className="font-medium text-foreground">Situação: </span>
+                  <Badge label={formData.situacao} />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
+
+      {/* CONFIRM DELETE MODAL */}
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={() => confirmDeleteId && handleDelete(confirmDeleteId)}
+        title="Excluir Atendimento"
+        message="Tem certeza de que deseja excluir este atendimento da agenda? Esta ação não pode ser desfeita."
+        confirmLabel="Sim, excluir"
+      />
     </div>
   );
 }
@@ -2325,8 +4495,18 @@ function AtendimentoDetalhePage({ id, onBack, onNav, showToast }: {
   onNav: (p: Page, id?: number) => void;
   showToast: (m: string, t?: "success" | "error") => void;
 }) {
+  const [, setTick] = useState(0);
   const atend = DB.atendimentos.find((a) => a.id === id);
   if (!atend) return null;
+
+  const handleUpdateStatus = (newSit: string, msg: string, isError = false) => {
+    atend.situacao = newSit;
+    if (newSit === "REALIZADO") {
+      atend.data_hora_atendimento = atend.data_hora_atendimento || atend.data_hora_agendada;
+    }
+    setTick((t) => t + 1);
+    showToast(msg, isError ? "error" : "success");
+  };
 
   const pac = DB.pacientes.find((p) => p.id === atend.id_paciente);
   const profRel = DB.professores_atendimentos.find((pa) => pa.id_atendimento === atend.id);
@@ -2352,16 +4532,15 @@ function AtendimentoDetalhePage({ id, onBack, onNav, showToast }: {
           <p className="text-sm text-muted-foreground">{fmtDatetime(atend.data_hora_agendada)}</p>
         </div>
         <div className="ml-auto flex gap-2">
-          <Btn size="sm" variant="secondary" icon={<Edit2 size={13} />}>Editar</Btn>
           {atend.situacao === "AGENDADO" && (
             <>
-              <Btn size="sm" icon={<CheckCircle size={13} />} onClick={() => showToast("Atendimento marcado como realizado!")}>
+              <Btn size="sm" icon={<CheckCircle size={13} />} onClick={() => handleUpdateStatus("REALIZADO", "Atendimento marcado como realizado!")}>
                 Marcar Realizado
               </Btn>
-              <Btn size="sm" variant="secondary" icon={<RefreshCw size={13} />} onClick={() => showToast("Atendimento remarcado.")}>
+              <Btn size="sm" variant="secondary" icon={<RefreshCw size={13} />} onClick={() => handleUpdateStatus("REMARCADO", "Atendimento remarcado.")}>
                 Remarcar
               </Btn>
-              <Btn size="sm" variant="danger" icon={<XCircle size={13} />} onClick={() => showToast("Atendimento cancelado.", "error")}>
+              <Btn size="sm" variant="danger" icon={<XCircle size={13} />} onClick={() => handleUpdateStatus("CANCELADO", "Atendimento cancelado.", true)}>
                 Cancelar
               </Btn>
             </>
@@ -2798,11 +4977,11 @@ export default function App() {
       case "usuarios": return <UsuariosPage showToast={showToast} />;
       case "professores": return <ProfessoresPage onNav={navigate} showToast={showToast} />;
       case "professor-detalhe": return selectedId ? (
-        <ProfessorDetalhePage id={selectedId} onBack={() => navigate("professores")} onNav={navigate} />
+        <ProfessorDetalhePage id={selectedId} onBack={() => navigate("professores")} onNav={navigate} showToast={showToast} />
       ) : null;
       case "alunos": return <AlunosPage onNav={navigate} showToast={showToast} />;
       case "aluno-detalhe": return selectedId ? (
-        <AlunoDetalhePage id={selectedId} onBack={() => navigate("alunos")} onNav={navigate} />
+        <AlunoDetalhePage id={selectedId} onBack={() => navigate("alunos")} onNav={navigate} showToast={showToast} />
       ) : null;
       case "pacientes": return <PacientesPage onNav={navigate} showToast={showToast} />;
       case "paciente-detalhe": return selectedId ? (
