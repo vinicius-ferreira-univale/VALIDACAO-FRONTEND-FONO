@@ -2576,88 +2576,412 @@ function PacienteDetalhePage({ id, onBack, onNav, showToast }: {
 // RESPONSÁVEIS PAGE
 // ============================================================
 function ResponsaveisPage({ showToast }: { showToast: (m: string, t?: "success" | "error") => void }) {
+  const [responsaveisList, setResponsaveisList] = useState<Responsavel[]>(() => [...DB.responsaveis]);
   const [search, setSearch] = useState("");
+  const [filterSit, setFilterSit] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [editingResp, setEditingResp] = useState<Responsavel | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
-  const filtered = DB.responsaveis.filter((r) => {
-    const s = search.toLowerCase();
-    return !s || r.nome_completo.toLowerCase().includes(s) || r.cpf.includes(s);
-  });
+  const initialFormState = {
+    nome_completo: "",
+    cpf: "",
+    whatsapp: "",
+    situacao: "ATIVO",
+    id_paciente: "",
+    grau_parentesco: "Mãe",
+  };
+
+  const [formData, setFormData] = useState(initialFormState);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const enriched = useMemo(() => {
+    return responsaveisList.map((r) => {
+      const pacCount = DB.responsaveis_pacientes.filter((rp) => rp.id_responsavel === r.id).length;
+      const pacientes = DB.responsaveis_pacientes
+        .filter((rp) => rp.id_responsavel === r.id)
+        .map((rp) => ({
+          ...rp,
+          paciente: DB.pacientes.find((p) => p.id === rp.id_paciente),
+        }));
+      return { ...r, pacCount, pacientes };
+    });
+  }, [responsaveisList]);
+
+  const filtered = useMemo(() => {
+    return enriched.filter((r) => {
+      const s = search.toLowerCase().trim();
+      const matchSearch = !s || r.nome_completo.toLowerCase().includes(s) || r.cpf.includes(s) || r.whatsapp.includes(s);
+      const matchSit = !filterSit || r.situacao === filterSit;
+      return matchSearch && matchSit;
+    });
+  }, [enriched, search, filterSit]);
+
+  const handleOpenCreateModal = () => {
+    setFormData({
+      nome_completo: "",
+      cpf: "",
+      whatsapp: "",
+      situacao: "ATIVO",
+      id_paciente: "",
+      grau_parentesco: "Mãe",
+    });
+    setFormErrors({});
+    setEditingResp(null);
+    setShowModal(true);
+  };
+
+  const handleOpenEditModal = (r: Responsavel) => {
+    const rel = DB.responsaveis_pacientes.find((rp) => rp.id_responsavel === r.id);
+    setFormData({
+      nome_completo: r.nome_completo,
+      cpf: r.cpf,
+      whatsapp: r.whatsapp,
+      situacao: r.situacao,
+      id_paciente: rel ? String(rel.id_paciente) : "",
+      grau_parentesco: rel?.grau_parentesco || "Mãe",
+    });
+    setFormErrors({});
+    setEditingResp(r);
+    setShowModal(true);
+  };
+
+  const handleSave = () => {
+    const errors: Record<string, string> = {};
+    if (!formData.nome_completo.trim()) errors.nome_completo = "Informe o nome completo";
+    if (!formData.cpf.trim()) errors.cpf = "Informe o CPF";
+    if (!formData.whatsapp.trim()) errors.whatsapp = "Informe o WhatsApp/Telefone";
+
+    // Duplicate CPF check
+    const dupCpf = DB.responsaveis.find(
+      (r) =>
+        r.cpf.trim() === formData.cpf.trim() &&
+        (!editingResp || r.id !== editingResp.id)
+    );
+    if (dupCpf) errors.cpf = "Já existe um responsável com este CPF";
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      showToast("Preencha todos os campos obrigatórios corretamente.", "error");
+      return;
+    }
+
+    if (editingResp) {
+      // Update
+      const idx = DB.responsaveis.findIndex((r) => r.id === editingResp.id);
+      if (idx !== -1) {
+        DB.responsaveis[idx] = {
+          ...DB.responsaveis[idx],
+          nome_completo: formData.nome_completo.trim(),
+          cpf: formData.cpf.trim(),
+          whatsapp: formData.whatsapp.trim(),
+          situacao: formData.situacao,
+        };
+      }
+
+      // Update or link paciente
+      if (formData.id_paciente) {
+        const rpIdx = DB.responsaveis_pacientes.findIndex((rp) => rp.id_responsavel === editingResp.id);
+        if (rpIdx !== -1) {
+          DB.responsaveis_pacientes[rpIdx].id_paciente = Number(formData.id_paciente);
+          DB.responsaveis_pacientes[rpIdx].grau_parentesco = formData.grau_parentesco;
+        } else {
+          const nextRpId = DB.responsaveis_pacientes.reduce((m, rp) => Math.max(m, rp.id), 0) + 1;
+          DB.responsaveis_pacientes.push({
+            id: nextRpId,
+            id_responsavel: editingResp.id,
+            id_paciente: Number(formData.id_paciente),
+            grau_parentesco: formData.grau_parentesco,
+            observacoes: "",
+          });
+        }
+      }
+
+      setResponsaveisList([...DB.responsaveis]);
+      setShowModal(false);
+      setEditingResp(null);
+      showToast("Responsável atualizado com sucesso!");
+    } else {
+      // Create new
+      const nextId = DB.responsaveis.reduce((m, r) => Math.max(m, r.id), 0) + 1;
+      const newResp: Responsavel = {
+        id: nextId,
+        nome_completo: formData.nome_completo.trim(),
+        cpf: formData.cpf.trim(),
+        whatsapp: formData.whatsapp.trim(),
+        situacao: formData.situacao || "ATIVO",
+      };
+
+      DB.responsaveis.unshift(newResp);
+
+      // Link paciente if selected
+      if (formData.id_paciente) {
+        const nextRpId = DB.responsaveis_pacientes.reduce((m, rp) => Math.max(m, rp.id), 0) + 1;
+        DB.responsaveis_pacientes.push({
+          id: nextRpId,
+          id_responsavel: nextId,
+          id_paciente: Number(formData.id_paciente),
+          grau_parentesco: formData.grau_parentesco,
+          observacoes: "",
+        });
+      }
+
+      setResponsaveisList([...DB.responsaveis]);
+      setShowModal(false);
+      showToast("Responsável cadastrado com sucesso!");
+    }
+  };
+
+  const handleDelete = (id: number) => {
+    const idx = DB.responsaveis.findIndex((r) => r.id === id);
+    if (idx !== -1) {
+      DB.responsaveis.splice(idx, 1);
+      // Remove related responsaveis_pacientes entries
+      const remaining = DB.responsaveis_pacientes.filter((rp) => rp.id_responsavel !== id);
+      DB.responsaveis_pacientes.length = 0;
+      DB.responsaveis_pacientes.push(...remaining);
+
+      setResponsaveisList([...DB.responsaveis]);
+      setConfirmDeleteId(null);
+      showToast("Responsável excluído com sucesso.");
+    }
+  };
+
+  // Preview helper
+  const previewPaciente = DB.pacientes.find((p) => String(p.id) === formData.id_paciente);
 
   return (
     <div>
       <Breadcrumb items={[{ label: "Gestão Clínica" }, { label: "Responsáveis" }]} />
       <PageHeader
         title="Responsáveis"
-        sub="Gerenciamento de responsáveis por pacientes"
-        action={<Btn icon={<Plus size={14} />} onClick={() => setShowModal(true)}>Novo Responsável</Btn>}
+        sub={`${responsaveisList.length} responsáveis cadastrados`}
+        action={<Btn icon={<Plus size={14} />} onClick={handleOpenCreateModal}>Novo Responsável</Btn>}
       />
+
       <Card>
-        <div className="p-3 border-b border-border">
-          <SearchBar value={search} onChange={setSearch} placeholder="Buscar responsável..." />
+        <div className="flex flex-wrap gap-2 p-3 border-b border-border items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center">
+            <SearchBar value={search} onChange={setSearch} placeholder="Buscar por nome, CPF ou WhatsApp..." />
+            <select
+              value={filterSit}
+              onChange={(e) => setFilterSit(e.target.value)}
+              className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Todas as situações</option>
+              <option value="ATIVO">Ativo</option>
+              <option value="INATIVO">Inativo</option>
+            </select>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            Exibindo {filtered.length} de {responsaveisList.length} responsáveis
+          </span>
         </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/30">
-                {["Nome", "CPF", "WhatsApp", "Pacientes", "Situação", "Ações"].map((h) => (
+                {["Nome", "CPF", "WhatsApp", "Pacientes Vinculados", "Situação", "Ações"].map((h) => (
                   <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {filtered.map((r) => {
-                const pacCount = DB.responsaveis_pacientes.filter((rp) => rp.id_responsavel === r.id).length;
-                return (
-                  <tr key={r.id} className="hover:bg-accent/40 transition">
-                    <td className="px-4 py-3 font-medium">{r.nome_completo}</td>
-                    <td className="px-4 py-3 text-muted-foreground font-mono text-xs">{r.cpf}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{r.whatsapp}</td>
-                    <td className="px-4 py-3">
-                      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                        <Users size={11} /> {pacCount} paciente{pacCount !== 1 ? "s" : ""}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3"><Badge label={r.situacao} /></td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1">
-                        <button className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"><Edit2 size={13} /></button>
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <EmptyState message="Nenhum responsável encontrado." />
+                  </td>
+                </tr>
+              )}
+              {filtered.map((r) => (
+                <tr key={r.id} className="hover:bg-accent/40 transition">
+                  <td className="px-4 py-3 font-medium text-foreground">
+                    <div>{r.nome_completo}</div>
+                    {r.pacientes.length > 0 && (
+                      <div className="text-[11px] text-muted-foreground">
+                        {r.pacientes.map((rp) => `${rp.paciente?.nome_completo || "—"} (${rp.grau_parentesco})`).join(" · ")}
                       </div>
-                    </td>
-                  </tr>
-                );
-              })}
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground font-mono text-xs">{r.cpf}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{r.whatsapp}</td>
+                  <td className="px-4 py-3">
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-foreground bg-muted/40 px-2 py-0.5 rounded">
+                      <Users size={11} className="text-primary" /> {r.pacCount} paciente{r.pacCount !== 1 ? "s" : ""}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3"><Badge label={r.situacao} /></td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1">
+                      <button
+                        className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"
+                        onClick={() => handleOpenEditModal(r)}
+                        title="Editar"
+                      >
+                        <Edit2 size={13} />
+                      </button>
+                      <button
+                        className="p-1 hover:bg-red-50 rounded transition text-muted-foreground hover:text-red-600"
+                        onClick={() => setConfirmDeleteId(r.id)}
+                        title="Excluir"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       </Card>
+
+      {/* MODAL NOVO / EDITAR RESPONSÁVEL */}
       <Modal
         open={showModal}
-        title="Novo Responsável"
-        onClose={() => setShowModal(false)}
+        title={editingResp ? `Editar Responsável — ${editingResp.nome_completo}` : "Novo Responsável"}
+        onClose={() => { setShowModal(false); setEditingResp(null); }}
         footer={
           <>
-            <Btn variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Btn>
-            <Btn onClick={() => { setShowModal(false); showToast("Responsável cadastrado!"); }}>Salvar</Btn>
+            <Btn variant="secondary" onClick={() => { setShowModal(false); setEditingResp(null); }}>
+              Cancelar
+            </Btn>
+            <Btn onClick={handleSave}>
+              {editingResp ? "Atualizar" : "Salvar"}
+            </Btn>
           </>
         }
       >
-        <div className="flex flex-col gap-3">
-          <Input label="Nome completo" value="" onChange={() => { }} required />
-          <Input label="CPF" value="" onChange={() => { }} placeholder="000.000.000-00" />
-          <Input label="WhatsApp" value="" onChange={() => { }} placeholder="(00) 00000-0000" />
-          <Select label="Situação" value="" onChange={() => { }}
-            options={[{ value: "ATIVO", label: "Ativo" }, { value: "INATIVO", label: "Inativo" }]} />
-          <div className="border-t border-border pt-3">
-            <p className="text-sm font-medium mb-2">Vincular Paciente</p>
-            <Select label="Paciente" value="" onChange={() => { }}
-              options={DB.pacientes.map((p) => ({ value: String(p.id), label: p.nome_completo }))} />
-            <div className="mt-2">
-              <Input label="Grau de Parentesco" value="" onChange={() => { }} placeholder="Ex: Mãe, Pai, Cônjuge" />
+        <div className="flex flex-col gap-3.5">
+          {/* NOME COMPLETO */}
+          <Input
+            label="Nome Completo"
+            value={formData.nome_completo}
+            error={formErrors.nome_completo}
+            onChange={(val) => {
+              setFormData((prev) => ({ ...prev, nome_completo: val }));
+              if (formErrors.nome_completo) setFormErrors((prev) => ({ ...prev, nome_completo: "" }));
+            }}
+            placeholder="Nome completo do responsável"
+            required
+          />
+
+          {/* CPF & WHATSAPP */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input
+              label="CPF"
+              value={formData.cpf}
+              error={formErrors.cpf}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, cpf: val }));
+                if (formErrors.cpf) setFormErrors((prev) => ({ ...prev, cpf: "" }));
+              }}
+              placeholder="000.000.000-00"
+              required
+            />
+            <Input
+              label="WhatsApp / Telefone"
+              value={formData.whatsapp}
+              error={formErrors.whatsapp}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, whatsapp: val }));
+                if (formErrors.whatsapp) setFormErrors((prev) => ({ ...prev, whatsapp: "" }));
+              }}
+              placeholder="(00) 00000-0000"
+              required
+            />
+          </div>
+
+          {/* SITUAÇÃO */}
+          <Select
+            label="Situação"
+            value={formData.situacao}
+            onChange={(val) => setFormData((prev) => ({ ...prev, situacao: val }))}
+            options={[
+              { value: "ATIVO", label: "Ativo" },
+              { value: "INATIVO", label: "Inativo" },
+            ]}
+            required
+          />
+
+          {/* VINCULAR PACIENTE (OPCIONAL) */}
+          <div className="border-t border-border pt-3 mt-1">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+              Vínculo com Paciente (Opcional)
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Select
+                label="Paciente"
+                value={formData.id_paciente}
+                onChange={(val) => setFormData((prev) => ({ ...prev, id_paciente: val }))}
+                options={[
+                  { value: "", label: "Nenhum paciente vinculado" },
+                  ...DB.pacientes.map((p) => ({
+                    value: String(p.id),
+                    label: `${p.nome_completo} (${p.cod_prontuario})`,
+                  })),
+                ]}
+              />
+              {formData.id_paciente && (
+                <Input
+                  label="Grau de Parentesco"
+                  value={formData.grau_parentesco}
+                  onChange={(val) => setFormData((prev) => ({ ...prev, grau_parentesco: val }))}
+                  placeholder="Ex: Mãe, Pai, Cônjuge, Tutor"
+                />
+              )}
             </div>
           </div>
+
+          {/* LIVE SELECTION PREVIEW BOX */}
+          {formData.nome_completo && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-xs space-y-1.5 mt-1">
+              <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                <CheckCircle size={14} />
+                Resumo do Responsável Selecionado:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground pt-1">
+                <div className="col-span-full">
+                  <span className="font-medium text-foreground">Nome: </span>
+                  <span className="text-foreground font-semibold">{formData.nome_completo}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">CPF: </span>
+                  <span className="font-mono text-foreground">{formData.cpf || "—"}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">WhatsApp: </span>
+                  <span className="text-foreground">{formData.whatsapp || "—"}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Situação: </span>
+                  <Badge label={formData.situacao} />
+                </div>
+                {previewPaciente && (
+                  <div className="col-span-full">
+                    <span className="font-medium text-foreground">Vínculo: </span>
+                    <span className="text-foreground">
+                      {previewPaciente.nome_completo} ({formData.grau_parentesco}) • {previewPaciente.cod_prontuario}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
+
+      {/* CONFIRM DELETE MODAL */}
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={() => confirmDeleteId && handleDelete(confirmDeleteId)}
+        title="Excluir Responsável"
+        message="Tem certeza de que deseja excluir este responsável? Esta ação não pode ser desfeita."
+        confirmLabel="Sim, excluir"
+      />
     </div>
   );
 }
@@ -4668,77 +4992,262 @@ function AtendimentoDetalhePage({ id, onBack, onNav, showToast }: {
 // CLÍNICAS PAGE
 // ============================================================
 function ClinicasPage({ showToast }: { showToast: (m: string, t?: "success" | "error") => void }) {
+  const [clinicasList, setClinicasList] = useState<Clinica[]>(() => [...DB.clinicas]);
+  const [search, setSearch] = useState("");
+  const [filterSit, setFilterSit] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [editingClinica, setEditingClinica] = useState<Clinica | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+
+  const initialFormState = {
+    clinica: "",
+    situacao: "ATIVO",
+  };
+
+  const [formData, setFormData] = useState(initialFormState);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const enriched = useMemo(() => {
+    return clinicasList.map((c) => {
+      const atendCount = DB.atendimentos_clinicas.filter((ac) => ac.id_clinica === c.id).length;
+      const exames = DB.clinicas_exames
+        .filter((ce) => ce.id_clinica === c.id)
+        .map((ce) => ({ ...ce, exame: DB.exames.find((e) => e.id === ce.id_exame) }));
+      return { ...c, atendCount, exames };
+    });
+  }, [clinicasList]);
+
+  const filtered = useMemo(() => {
+    return enriched.filter((c) => {
+      const s = search.toLowerCase().trim();
+      const matchSearch = !s || c.clinica.toLowerCase().includes(s);
+      const matchSit = !filterSit || c.situacao === filterSit;
+      return matchSearch && matchSit;
+    });
+  }, [enriched, search, filterSit]);
+
+  const handleOpenCreateModal = () => {
+    setFormData({ clinica: "", situacao: "ATIVO" });
+    setFormErrors({});
+    setEditingClinica(null);
+    setShowModal(true);
+  };
+
+  const handleOpenEditModal = (c: Clinica) => {
+    setFormData({ clinica: c.clinica, situacao: c.situacao });
+    setFormErrors({});
+    setEditingClinica(c);
+    setShowModal(true);
+  };
+
+  const handleSave = () => {
+    const errors: Record<string, string> = {};
+    if (!formData.clinica.trim()) errors.clinica = "Informe o nome da clínica";
+
+    const dup = DB.clinicas.find(
+      (c) =>
+        c.clinica.trim().toLowerCase() === formData.clinica.trim().toLowerCase() &&
+        (!editingClinica || c.id !== editingClinica.id)
+    );
+    if (dup) errors.clinica = "Já existe uma clínica com este nome";
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      showToast("Preencha os campos corretamente.", "error");
+      return;
+    }
+
+    if (editingClinica) {
+      const idx = DB.clinicas.findIndex((c) => c.id === editingClinica.id);
+      if (idx !== -1) {
+        DB.clinicas[idx] = { ...DB.clinicas[idx], clinica: formData.clinica.trim(), situacao: formData.situacao };
+      }
+      setClinicasList([...DB.clinicas]);
+      setShowModal(false);
+      setEditingClinica(null);
+      showToast("Clínica atualizada com sucesso!");
+    } else {
+      const nextId = DB.clinicas.reduce((m, c) => Math.max(m, c.id), 0) + 1;
+      const newClinica: Clinica = { id: nextId, clinica: formData.clinica.trim(), situacao: formData.situacao || "ATIVO" };
+      DB.clinicas.push(newClinica);
+      setClinicasList([...DB.clinicas]);
+      setShowModal(false);
+      showToast("Clínica cadastrada com sucesso!");
+    }
+  };
+
+  const handleDelete = (id: number) => {
+    const idx = DB.clinicas.findIndex((c) => c.id === id);
+    if (idx !== -1) {
+      DB.clinicas.splice(idx, 1);
+      setClinicasList([...DB.clinicas]);
+      setConfirmDeleteId(null);
+      showToast("Clínica excluída com sucesso.");
+    }
+  };
 
   return (
     <div>
       <Breadcrumb items={[{ label: "Gestão Clínica" }, { label: "Clínicas" }]} />
       <PageHeader
         title="Clínicas"
-        sub="Gerenciamento de clínicas e seus exames"
-        action={<Btn icon={<Plus size={14} />} onClick={() => setShowModal(true)}>Nova Clínica</Btn>}
+        sub={`${clinicasList.length} clínicas cadastradas`}
+        action={<Btn icon={<Plus size={14} />} onClick={handleOpenCreateModal}>Nova Clínica</Btn>}
       />
-      <div className="flex flex-col gap-4">
-        {DB.clinicas.map((c) => {
-          const atendCount = DB.atendimentos_clinicas.filter((ac) => ac.id_clinica === c.id).length;
-          const exames = DB.clinicas_exames.filter((ce) => ce.id_clinica === c.id);
-          return (
-            <Card key={c.id} className="p-4">
+
+      {/* SEARCH & FILTER BAR */}
+      <Card className="mb-4">
+        <div className="flex flex-wrap gap-2 p-3 items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center">
+            <SearchBar value={search} onChange={setSearch} placeholder="Buscar clínica por nome..." />
+            <select
+              value={filterSit}
+              onChange={(e) => setFilterSit(e.target.value)}
+              className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Todas as situações</option>
+              <option value="ATIVO">Ativo</option>
+              <option value="INATIVO">Inativo</option>
+            </select>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            Exibindo {filtered.length} de {clinicasList.length} clínicas
+          </span>
+        </div>
+      </Card>
+
+      {filtered.length === 0 ? (
+        <Card className="p-8">
+          <EmptyState message="Nenhuma clínica encontrada." />
+        </Card>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {filtered.map((c) => (
+            <Card key={c.id} className="p-4 hover:shadow-sm transition">
               <div className="flex items-start justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center">
-                    <Building2 size={16} className="text-blue-600" />
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+                    <Building2 size={18} className="text-blue-600" />
                   </div>
                   <div>
-                    <h3 className="font-semibold">{c.clinica}</h3>
-                    <p className="text-xs text-muted-foreground">{atendCount} atendimento{atendCount !== 1 ? "s" : ""}</p>
+                    <h3 className="font-semibold text-foreground">{c.clinica}</h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {c.atendCount} atendimento{c.atendCount !== 1 ? "s" : ""} realizados
+                      {c.exames.length > 0 && ` · ${c.exames.length} exame${c.exames.length !== 1 ? "s" : ""} vinculado${c.exames.length !== 1 ? "s" : ""}`}
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge label={c.situacao} />
-                  <button className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground">
+                  <button
+                    className="p-1.5 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"
+                    onClick={() => handleOpenEditModal(c)}
+                    title="Editar"
+                  >
                     <Edit2 size={13} />
+                  </button>
+                  <button
+                    className="p-1.5 hover:bg-red-50 rounded transition text-muted-foreground hover:text-red-600"
+                    onClick={() => setConfirmDeleteId(c.id)}
+                    title="Excluir"
+                  >
+                    <Trash2 size={13} />
                   </button>
                 </div>
               </div>
-              {exames.length > 0 && (
+
+              {c.exames.length > 0 && (
                 <div>
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Exames disponíveis</p>
                   <div className="flex flex-wrap gap-2">
-                    {exames.map((ce) => {
-                      const exame = DB.exames.find((e) => e.id === ce.id_exame);
-                      return (
-                        <div key={ce.id} className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
-                          <FlaskConical size={11} />
-                          {exame?.exame}
-                          {ce.path_documento && <FileText size={11} className="text-amber-600" />}
-                        </div>
-                      );
-                    })}
+                    {c.exames.map((ce) => (
+                      <div key={ce.id} className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+                        <FlaskConical size={11} />
+                        {ce.exame?.exame}
+                        {ce.path_documento && <FileText size={11} className="text-amber-600" />}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
             </Card>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
+
+      {/* MODAL NOVA / EDITAR CLÍNICA */}
       <Modal
         open={showModal}
-        title="Nova Clínica"
-        onClose={() => setShowModal(false)}
+        title={editingClinica ? `Editar Clínica — ${editingClinica.clinica}` : "Nova Clínica"}
+        onClose={() => { setShowModal(false); setEditingClinica(null); }}
         footer={
           <>
-            <Btn variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Btn>
-            <Btn onClick={() => { setShowModal(false); showToast("Clínica cadastrada!"); }}>Salvar</Btn>
+            <Btn variant="secondary" onClick={() => { setShowModal(false); setEditingClinica(null); }}>
+              Cancelar
+            </Btn>
+            <Btn onClick={handleSave}>
+              {editingClinica ? "Atualizar" : "Salvar"}
+            </Btn>
           </>
         }
       >
-        <div className="flex flex-col gap-3">
-          <Input label="Nome da Clínica" value="" onChange={() => { }} required />
-          <Select label="Situação" value="" onChange={() => { }}
-            options={[{ value: "ATIVO", label: "Ativo" }, { value: "INATIVO", label: "Inativo" }]} />
+        <div className="flex flex-col gap-3.5">
+          {/* NOME DA CLÍNICA */}
+          <Input
+            label="Nome da Clínica"
+            value={formData.clinica}
+            error={formErrors.clinica}
+            onChange={(val) => {
+              setFormData((prev) => ({ ...prev, clinica: val }));
+              if (formErrors.clinica) setFormErrors((prev) => ({ ...prev, clinica: "" }));
+            }}
+            placeholder="Ex: Clínica de Fonoaudiologia Geral"
+            required
+          />
+
+          {/* SITUAÇÃO */}
+          <Select
+            label="Situação"
+            value={formData.situacao}
+            onChange={(val) => setFormData((prev) => ({ ...prev, situacao: val }))}
+            options={[
+              { value: "ATIVO", label: "Ativo" },
+              { value: "INATIVO", label: "Inativo" },
+            ]}
+            required
+          />
+
+          {/* LIVE PREVIEW */}
+          {formData.clinica && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-xs space-y-1.5 mt-1">
+              <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                <CheckCircle size={14} />
+                Resumo da Clínica Selecionada:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground pt-1">
+                <div className="col-span-full">
+                  <span className="font-medium text-foreground">Nome: </span>
+                  <span className="text-primary font-semibold">{formData.clinica}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Situação: </span>
+                  <Badge label={formData.situacao} />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
+
+      {/* CONFIRM DELETE MODAL */}
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={() => confirmDeleteId && handleDelete(confirmDeleteId)}
+        title="Excluir Clínica"
+        message="Tem certeza de que deseja excluir esta clínica? Esta ação não pode ser desfeita."
+        confirmLabel="Sim, excluir"
+      />
     </div>
   );
 }
