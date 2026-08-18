@@ -12,7 +12,7 @@ import {
   BookOpen, Lock, Hash, Clock, TrendingUp, HeartPulse,
   Check, Filter, Home, AlertTriangle, MoreVertical, ChevronLeft,
   MapPin, Download, RefreshCw, CalendarDays, UserPlus, Shield,
-  Layers,
+  Layers, CheckCheck,
 } from "lucide-react";
 
 // ============================================================
@@ -35,7 +35,7 @@ type Page =
   | "perfil";
 
 interface Usuario { id: number; nome: string; email: string; perfil: Perfil; situacao: string; data_criacao: string; }
-interface Professor { id: number; id_usuario: number; nome_completo: string; email: string; telefone: string; data_cadastro: string; situacao: string; }
+interface Professor { id: number; id_usuario: number | null; nome_completo: string; email: string; telefone: string; data_cadastro: string; situacao: string; }
 interface Aluno { id: number; id_usuario: number | null; nome: string; email: string; telefone: string; ra: string; situacao: string; }
 interface Paciente { id: number; cod_prontuario: string; local_fisico: string; nome_completo: string; data_nascimento: string; cpf: string; situacao: string; }
 interface Responsavel { id: number; nome_completo: string; cpf: string; whatsapp: string; situacao: string; }
@@ -552,23 +552,34 @@ function Sidebar({ perfil, currentPage, onNav, collapsed, onToggle, onLogout, us
       className={`flex flex-col h-screen bg-sidebar text-sidebar-foreground border-r border-sidebar-border transition-all duration-200 shrink-0
         ${collapsed ? "w-14" : "w-56"}`}
     >
-      {/* Logo */}
-      <div className="flex items-center gap-2.5 px-3 py-4 border-b border-sidebar-border">
-        <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center shrink-0 p-1">
-          <img src="/logo-univale.jpg" alt="Univale" className="w-full h-full object-contain" />
-        </div>
-        {!collapsed && (
-          <div className="min-w-0 pr-1">
-            <p className="text-[11px] font-bold text-white leading-tight">Clínica Especializada de Fonoaudiologia</p>
-            <p className="text-[10px] text-slate-400 truncate mt-0.5">UNIVALE</p>
-          </div>
+      {/* Logo & Collapse/Expand Button */}
+      <div className={`flex items-center ${collapsed ? "justify-center px-1" : "gap-2.5 px-3"} py-3.5 border-b border-sidebar-border relative`}>
+        {!collapsed ? (
+          <>
+            <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center shrink-0 p-1">
+              <img src="/logo-univale.jpg" alt="Univale" className="w-full h-full object-contain" />
+            </div>
+            <div className="min-w-0 pr-1 flex-1">
+              <p className="text-[11px] font-bold text-white leading-tight">Clínica Especializada de Fonoaudiologia</p>
+              <p className="text-[10px] text-slate-400 truncate mt-0.5">UNIVALE</p>
+            </div>
+            <button
+              onClick={onToggle}
+              title="Recolher menu lateral"
+              className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-sidebar-accent transition"
+            >
+              <ChevronLeft size={16} />
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={onToggle}
+            title="Expandir menu lateral"
+            className="w-10 h-10 rounded-lg bg-sidebar-accent/60 hover:bg-sidebar-accent flex items-center justify-center text-slate-200 hover:text-white transition group shadow-sm"
+          >
+            <ChevronRight size={18} className="group-hover:translate-x-0.5 transition-transform text-white" />
+          </button>
         )}
-        <button
-          onClick={onToggle}
-          className={`ml-auto text-slate-400 hover:text-white transition ${collapsed ? "" : ""}`}
-        >
-          <Menu size={15} />
-        </button>
       </div>
 
       {/* Nav */}
@@ -606,10 +617,24 @@ function Sidebar({ perfil, currentPage, onNav, collapsed, onToggle, onLogout, us
         ))}
       </nav>
 
+      {/* Expand Button at bottom of nav when collapsed */}
+      {collapsed && (
+        <div className="px-1.5 pb-2">
+          <button
+            onClick={onToggle}
+            title="Expandir menu lateral"
+            className="w-full flex items-center justify-center py-2 rounded-lg bg-sidebar-accent/60 text-slate-300 hover:text-white hover:bg-sidebar-accent transition"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      )}
+
       {/* User */}
       <div className="border-t border-sidebar-border p-2">
         <button
           onClick={() => onNav("perfil")}
+          title={collapsed ? userName : undefined}
           className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sidebar-accent transition"
         >
           <div className="w-7 h-7 rounded-full bg-sidebar-primary flex items-center justify-center shrink-0">
@@ -636,22 +661,287 @@ function Sidebar({ perfil, currentPage, onNav, collapsed, onToggle, onLogout, us
 }
 
 // ============================================================
-// HEADER
+// HEADER & NOTIFICATIONS
 // ============================================================
-function Header({ title, onMenuClick }: { title: string; onMenuClick: () => void }) {
+interface NotificationItem {
+  id: number;
+  title: string;
+  message: string;
+  time: string;
+  unread: boolean;
+  type: "atendimento" | "exame" | "matricula" | "professor" | "sistema";
+  page?: Page;
+  idRef?: number;
+}
+
+function Header({
+  title,
+  onMenuClick,
+  sidebarCollapsed,
+  onNav,
+  showToast,
+}: {
+  title: string;
+  onMenuClick: () => void;
+  sidebarCollapsed?: boolean;
+  onNav?: (p: Page, id?: number) => void;
+  showToast?: (m: string, t?: "success" | "error") => void;
+}) {
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [filter, setFilter] = useState<"all" | "unread">("all");
+  const [notifications, setNotifications] = useState<NotificationItem[]>([
+    {
+      id: 1,
+      title: "Novo Atendimento Agendado",
+      message: "Paciente João Pedro Oliveira agendado para amanhã às 09:00 na Clínica de Audiologia.",
+      time: "Há 10 min",
+      unread: true,
+      type: "atendimento",
+      page: "atendimentos",
+      idRef: 1,
+    },
+    {
+      id: 2,
+      title: "Laudo de Exame Anexado",
+      message: "Avaliação Miofuncional Orofacial vinculada à Clínica de Motricidade Orofacial.",
+      time: "Há 45 min",
+      unread: true,
+      type: "exame",
+      page: "exames",
+    },
+    {
+      id: 3,
+      title: "Matrícula Ativa no Grupo A",
+      message: "Aluna Ana Carolina Souza vinculada ao Período Letivo 2025/1.",
+      time: "Há 2 horas",
+      unread: true,
+      type: "matricula",
+      page: "matriculas",
+    },
+    {
+      id: 4,
+      title: "Docente Registrado no Sistema",
+      message: "Prof. Carlos Eduardo Lima cadastrado e vinculado com sucesso.",
+      time: "Ontem",
+      unread: false,
+      type: "professor",
+      page: "professores",
+      idRef: 1,
+    },
+    {
+      id: 5,
+      title: "Início do Período Letivo 2025/1",
+      message: "As atividades clínicas do novo período letivo estão abertas para agendamento.",
+      time: "2 dias atrás",
+      unread: false,
+      type: "sistema",
+      page: "periodos",
+    },
+  ]);
+
+  const unreadCount = notifications.filter((n) => n.unread).length;
+  const filtered = notifications.filter((n) => (filter === "unread" ? n.unread : true));
+
+  const handleMarkAllAsRead = () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })));
+    if (showToast) showToast("Todas as notificações foram marcadas como lidas.");
+  };
+
+  const handleClearAll = () => {
+    setNotifications([]);
+    if (showToast) showToast("Notificações limpas.");
+  };
+
+  const handleClickItem = (n: NotificationItem) => {
+    setNotifications((prev) => prev.map((item) => (item.id === n.id ? { ...item, unread: false } : item)));
+    setShowNotifications(false);
+    if (n.page && onNav) {
+      onNav(n.page, n.idRef);
+    }
+  };
+
+  const handleDismissItem = (e: React.MouseEvent, id: number) => {
+    e.stopPropagation();
+    setNotifications((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const getTypeIcon = (type: NotificationItem["type"]) => {
+    switch (type) {
+      case "atendimento":
+        return (
+          <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+            <Calendar size={15} />
+          </div>
+        );
+      case "exame":
+        return (
+          <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+            <FlaskConical size={15} />
+          </div>
+        );
+      case "matricula":
+        return (
+          <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+            <BookOpen size={15} />
+          </div>
+        );
+      case "professor":
+        return (
+          <div className="w-8 h-8 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center shrink-0">
+            <UserCheck size={15} />
+          </div>
+        );
+      default:
+        return (
+          <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
+            <Bell size={15} />
+          </div>
+        );
+    }
+  };
+
   return (
-    <div className="h-12 bg-card border-b border-border flex items-center gap-3 px-4 shrink-0">
+    <div className="h-12 bg-card border-b border-border flex items-center gap-3 px-4 shrink-0 relative z-30">
       <button
         onClick={onMenuClick}
-        className="lg:hidden text-muted-foreground hover:text-foreground transition"
+        title={sidebarCollapsed ? "Expandir barra lateral" : "Recolher barra lateral"}
+        className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition flex items-center justify-center"
       >
-        <Menu size={18} />
+        {sidebarCollapsed ? <ChevronRight size={18} /> : <Menu size={18} />}
       </button>
+
       <span className="flex-1 text-sm font-medium text-muted-foreground truncate">{title}</span>
-      <button className="relative text-muted-foreground hover:text-foreground transition">
-        <Bell size={17} />
-        <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500" />
-      </button>
+
+      {/* NOTIFICATION BELL CONTAINER */}
+      <div className="relative">
+        <button
+          onClick={() => setShowNotifications(!showNotifications)}
+          title="Notificações do Sistema"
+          className={`relative p-1.5 rounded-lg transition flex items-center justify-center ${
+            showNotifications
+              ? "bg-primary/10 text-primary"
+              : "text-muted-foreground hover:text-foreground hover:bg-accent"
+          }`}
+        >
+          <Bell size={18} />
+          {unreadCount > 0 && (
+            <span className="absolute -top-0.5 -right-0.5 min-w-[17px] h-4 px-1 rounded-full bg-red-500 text-[10px] font-bold text-white flex items-center justify-center shadow-sm">
+              {unreadCount}
+            </span>
+          )}
+        </button>
+
+        {/* NOTIFICATIONS DROPDOWN POPOVER */}
+        {showNotifications && (
+          <>
+            {/* Backdrop to close */}
+            <div className="fixed inset-0 z-40" onClick={() => setShowNotifications(false)} />
+
+            <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-card border border-border rounded-xl shadow-2xl z-50 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+              {/* Dropdown Header */}
+              <div className="px-4 py-3 border-b border-border flex items-center justify-between bg-muted/30">
+                <div className="flex items-center gap-2">
+                  <h4 className="font-semibold text-sm text-foreground">Notificações</h4>
+                  {unreadCount > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-primary text-primary-foreground">
+                      {unreadCount} nova{unreadCount > 1 ? "s" : ""}
+                    </span>
+                  )}
+                </div>
+                {unreadCount > 0 && (
+                  <button
+                    onClick={handleMarkAllAsRead}
+                    className="text-xs text-primary hover:underline flex items-center gap-1 font-medium transition"
+                  >
+                    <CheckCheck size={13} />
+                    Marcar lidas
+                  </button>
+                )}
+              </div>
+
+              {/* Filter Tabs */}
+              <div className="flex items-center px-4 py-2 border-b border-border/70 text-xs bg-card gap-2">
+                <button
+                  onClick={() => setFilter("all")}
+                  className={`px-2.5 py-1 rounded-md font-medium transition ${
+                    filter === "all"
+                      ? "bg-accent text-foreground shadow-xs font-semibold"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Todas ({notifications.length})
+                </button>
+                <button
+                  onClick={() => setFilter("unread")}
+                  className={`px-2.5 py-1 rounded-md font-medium transition ${
+                    filter === "unread"
+                      ? "bg-accent text-foreground shadow-xs font-semibold"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Não lidas ({unreadCount})
+                </button>
+              </div>
+
+              {/* Notifications List */}
+              <div className="max-h-80 overflow-y-auto divide-y divide-border/60">
+                {filtered.length === 0 ? (
+                  <div className="py-8 text-center text-muted-foreground flex flex-col items-center gap-2">
+                    <Bell size={28} className="opacity-30" />
+                    <p className="text-xs">Nenhuma notificação encontrada.</p>
+                  </div>
+                ) : (
+                  filtered.map((n) => (
+                    <div
+                      key={n.id}
+                      onClick={() => handleClickItem(n)}
+                      className={`p-3.5 flex items-start gap-3 hover:bg-accent/50 transition cursor-pointer group relative ${
+                        n.unread ? "bg-primary/5" : ""
+                      }`}
+                    >
+                      {getTypeIcon(n.type)}
+                      <div className="flex-1 min-w-0 pr-4">
+                        <div className="flex items-center gap-1.5">
+                          <p className={`text-xs font-semibold ${n.unread ? "text-foreground" : "text-foreground/80"}`}>
+                            {n.title}
+                          </p>
+                          {n.unread && <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2 leading-relaxed">
+                          {n.message}
+                        </p>
+                        <span className="text-[10px] text-muted-foreground/80 mt-1 block">
+                          {n.time}
+                        </span>
+                      </div>
+                      <button
+                        onClick={(e) => handleDismissItem(e, n.id)}
+                        title="Remover notificação"
+                        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-accent text-muted-foreground hover:text-red-600 transition absolute top-3 right-3"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Dropdown Footer */}
+              {notifications.length > 0 && (
+                <div className="px-4 py-2 border-t border-border flex items-center justify-between text-xs bg-muted/20">
+                  <span className="text-[11px] text-muted-foreground">Clique para navegar até a seção</span>
+                  <button
+                    onClick={handleClearAll}
+                    className="text-[11px] text-muted-foreground hover:text-red-600 transition flex items-center gap-1"
+                  >
+                    <Trash2 size={11} /> Limpar tudo
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -1036,52 +1326,164 @@ function Dashboard({ user, onNav }: { user: Usuario; onNav: (p: Page, id?: numbe
 // USUÁRIOS PAGE
 // ============================================================
 function UsuariosPage({ showToast }: { showToast: (m: string, t?: "success" | "error") => void }) {
+  const [usuariosList, setUsuariosList] = useState<Usuario[]>(() => [...DB.usuarios]);
   const [search, setSearch] = useState("");
   const [filterPerfil, setFilterPerfil] = useState("");
   const [filterSit, setFilterSit] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [editingUser, setEditingUser] = useState<Usuario | null>(null);
   const [confirmId, setConfirmId] = useState<number | null>(null);
 
-  const filtered = DB.usuarios.filter((u) => {
-    const s = search.toLowerCase();
-    const matchSearch = !s || u.nome.toLowerCase().includes(s) || u.email.toLowerCase().includes(s);
-    const matchPerfil = !filterPerfil || u.perfil === filterPerfil;
-    const matchSit = !filterSit || u.situacao === filterSit;
-    return matchSearch && matchPerfil && matchSit;
-  });
+  const initialFormState = {
+    nome: "",
+    email: "",
+    senha: "",
+    perfil: "ALUNO" as Perfil,
+    situacao: "ATIVO",
+  };
+  const [formData, setFormData] = useState(initialFormState);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const filtered = useMemo(() => {
+    return usuariosList.filter((u) => {
+      const s = search.toLowerCase().trim();
+      const matchSearch = !s || u.nome.toLowerCase().includes(s) || u.email.toLowerCase().includes(s);
+      const matchPerfil = !filterPerfil || u.perfil === filterPerfil;
+      const matchSit = !filterSit || u.situacao === filterSit;
+      return matchSearch && matchPerfil && matchSit;
+    });
+  }, [usuariosList, search, filterPerfil, filterSit]);
+
+  const handleOpenCreateModal = () => {
+    setFormData(initialFormState);
+    setFormErrors({});
+    setEditingUser(null);
+    setShowModal(true);
+  };
+
+  const handleOpenEditModal = (u: Usuario) => {
+    setFormData({
+      nome: u.nome,
+      email: u.email,
+      senha: "",
+      perfil: u.perfil,
+      situacao: u.situacao || "ATIVO",
+    });
+    setFormErrors({});
+    setEditingUser(u);
+    setShowModal(true);
+  };
+
+  const handleSave = () => {
+    const errors: Record<string, string> = {};
+    if (!formData.nome.trim()) {
+      errors.nome = "Informe o nome completo do usuário";
+    }
+    if (!formData.email.trim()) {
+      errors.email = "Informe o e-mail";
+    } else if (!formData.email.includes("@")) {
+      errors.email = "Informe um e-mail válido";
+    }
+    if (!editingUser && (!formData.senha || formData.senha.length < 6)) {
+      errors.senha = "A senha deve ter no mínimo 6 caracteres";
+    }
+    if (!formData.perfil) {
+      errors.perfil = "Selecione um perfil de acesso";
+    }
+
+    const duplicateEmail = DB.usuarios.find(
+      (u) => u.email.toLowerCase() === formData.email.trim().toLowerCase() && (!editingUser || u.id !== editingUser.id)
+    );
+    if (duplicateEmail) {
+      errors.email = "Este e-mail já pertence a outro usuário";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      showToast("Preencha todos os campos obrigatórios corretamente.", "error");
+      return;
+    }
+
+    if (editingUser) {
+      const idx = DB.usuarios.findIndex((u) => u.id === editingUser.id);
+      if (idx !== -1) {
+        DB.usuarios[idx] = {
+          ...DB.usuarios[idx],
+          nome: formData.nome.trim(),
+          email: formData.email.trim(),
+          perfil: formData.perfil,
+          situacao: formData.situacao || "ATIVO",
+        };
+      }
+      setUsuariosList([...DB.usuarios]);
+      setShowModal(false);
+      setEditingUser(null);
+      showToast("Usuário atualizado com sucesso!");
+    } else {
+      const nextId = DB.usuarios.reduce((m, u) => Math.max(m, u.id), 0) + 1;
+      const newUsuario: Usuario = {
+        id: nextId,
+        nome: formData.nome.trim(),
+        email: formData.email.trim(),
+        perfil: formData.perfil,
+        situacao: formData.situacao || "ATIVO",
+        data_criacao: new Date().toISOString().split("T")[0],
+      };
+
+      DB.usuarios.unshift(newUsuario);
+      setUsuariosList([...DB.usuarios]);
+      setShowModal(false);
+      showToast("Usuário cadastrado com sucesso!");
+    }
+  };
+
+  const handleDelete = (id: number) => {
+    const idx = DB.usuarios.findIndex((u) => u.id === id);
+    if (idx !== -1) {
+      DB.usuarios.splice(idx, 1);
+      setUsuariosList([...DB.usuarios]);
+      setConfirmId(null);
+      showToast("Usuário removido com sucesso.", "error");
+    }
+  };
 
   return (
     <div>
       <Breadcrumb items={[{ label: "Administração" }, { label: "Usuários" }]} />
       <PageHeader
         title="Usuários"
-        sub={`${DB.usuarios.length} usuários cadastrados`}
-        action={<Btn icon={<Plus size={14} />} onClick={() => setShowModal(true)}>Novo Usuário</Btn>}
+        sub={`${usuariosList.length} usuários cadastrados`}
+        action={<Btn icon={<Plus size={14} />} onClick={handleOpenCreateModal}>Novo Usuário</Btn>}
       />
 
       <Card>
-        <div className="flex flex-wrap gap-2 p-3 border-b border-border">
-          <SearchBar value={search} onChange={setSearch} placeholder="Buscar por nome ou e-mail..." />
-          <select
-            value={filterPerfil}
-            onChange={(e) => setFilterPerfil(e.target.value)}
-            className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
-          >
-            <option value="">Todos os perfis</option>
-            {["ADMIN", "SECRETARIA", "PROFESSOR", "ALUNO", "COORDENADOR"].map((p) => (
-              <option key={p} value={p}>{p}</option>
-            ))}
-          </select>
-          <select
-            value={filterSit}
-            onChange={(e) => setFilterSit(e.target.value)}
-            className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
-          >
-            <option value="">Todas as situações</option>
-            {["ATIVO", "INATIVO", "BLOQUEADO"].map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
+        <div className="flex flex-wrap gap-2 p-3 border-b border-border items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center">
+            <SearchBar value={search} onChange={setSearch} placeholder="Buscar por nome ou e-mail..." />
+            <select
+              value={filterPerfil}
+              onChange={(e) => setFilterPerfil(e.target.value)}
+              className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Todos os perfis</option>
+              {["ADMIN", "SECRETARIA", "PROFESSOR", "ALUNO", "COORDENADOR"].map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+            <select
+              value={filterSit}
+              onChange={(e) => setFilterSit(e.target.value)}
+              className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Todas as situações</option>
+              {["ATIVO", "INATIVO", "BLOQUEADO"].map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            Exibindo {filtered.length} de {usuariosList.length} usuários
+          </span>
         </div>
 
         <div className="overflow-x-auto">
@@ -1098,23 +1500,31 @@ function UsuariosPage({ showToast }: { showToast: (m: string, t?: "success" | "e
             </thead>
             <tbody className="divide-y divide-border">
               {filtered.length === 0 && (
-                <tr><td colSpan={6}><EmptyState /></td></tr>
+                <tr>
+                  <td colSpan={6}>
+                    <EmptyState message="Nenhum usuário encontrado." />
+                  </td>
+                </tr>
               )}
               {filtered.map((u) => (
                 <tr key={u.id} className="hover:bg-accent/40 transition">
-                  <td className="px-4 py-3 font-medium">{u.nome}</td>
+                  <td className="px-4 py-3 font-medium text-foreground">{u.nome}</td>
                   <td className="px-4 py-3 text-muted-foreground">{u.email}</td>
                   <td className="px-4 py-3"><Badge label={u.perfil} /></td>
                   <td className="px-4 py-3"><Badge label={u.situacao} /></td>
                   <td className="px-4 py-3 text-muted-foreground">{fmtDate(u.data_criacao)}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1 justify-center">
-                      <button className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground" title="Editar">
+                      <button
+                        className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"
+                        title="Editar usuário"
+                        onClick={() => handleOpenEditModal(u)}
+                      >
                         <Edit2 size={13} />
                       </button>
                       <button
                         className="p-1 hover:bg-red-50 rounded transition text-muted-foreground hover:text-red-600"
-                        title="Excluir"
+                        title="Excluir usuário"
                         onClick={() => setConfirmId(u.id)}
                       >
                         <Trash2 size={13} />
@@ -1128,43 +1538,146 @@ function UsuariosPage({ showToast }: { showToast: (m: string, t?: "success" | "e
         </div>
       </Card>
 
+      {/* MODAL NOVO / EDITAR USUÁRIO */}
       <Modal
         open={showModal}
-        title="Novo Usuário"
-        onClose={() => setShowModal(false)}
+        title={editingUser ? `Editar Usuário #${editingUser.id}` : "Novo Usuário"}
+        onClose={() => { setShowModal(false); setEditingUser(null); }}
         footer={
           <>
-            <Btn variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Btn>
-            <Btn onClick={() => { setShowModal(false); showToast("Usuário cadastrado com sucesso!"); }}>Salvar</Btn>
+            <Btn variant="secondary" onClick={() => { setShowModal(false); setEditingUser(null); }}>Cancelar</Btn>
+            <Btn onClick={handleSave}>{editingUser ? "Atualizar" : "Salvar"}</Btn>
           </>
         }
       >
-        <div className="flex flex-col gap-3">
-          <Input label="Nome completo" value="" onChange={() => { }} placeholder="Nome do usuário" required />
-          <Input label="E-mail" value="" onChange={() => { }} type="email" placeholder="email@exemplo.com.br" required />
-          <Input label="Senha" value="" onChange={() => { }} type="password" placeholder="Mínimo 8 caracteres" required />
-          <Select
-            label="Perfil"
-            value=""
-            onChange={() => { }}
-            options={["ADMIN", "SECRETARIA", "PROFESSOR", "ALUNO", "COORDENADOR"].map((p) => ({ value: p, label: p }))}
+        <div className="flex flex-col gap-3.5">
+          {/* NOME COMPLETO */}
+          <Input
+            label="Nome completo"
+            value={formData.nome}
+            error={formErrors.nome}
+            onChange={(val) => {
+              setFormData((prev) => ({ ...prev, nome: val }));
+              if (formErrors.nome) setFormErrors((prev) => ({ ...prev, nome: "" }));
+            }}
+            placeholder="Nome completo do usuário"
             required
           />
-          <Select
-            label="Situação"
-            value=""
-            onChange={() => { }}
-            options={[{ value: "ATIVO", label: "Ativo" }, { value: "INATIVO", label: "Inativo" }]}
+
+          {/* E-MAIL */}
+          <Input
+            label="E-mail"
+            type="email"
+            value={formData.email}
+            error={formErrors.email}
+            onChange={(val) => {
+              setFormData((prev) => ({ ...prev, email: val }));
+              if (formErrors.email) setFormErrors((prev) => ({ ...prev, email: "" }));
+            }}
+            placeholder="email@univale.br"
+            required
           />
+
+          {/* SENHA */}
+          <Input
+            label={editingUser ? "Nova Senha (deixe em branco para manter a atual)" : "Senha de Acesso"}
+            type="password"
+            value={formData.senha}
+            error={formErrors.senha}
+            onChange={(val) => {
+              setFormData((prev) => ({ ...prev, senha: val }));
+              if (formErrors.senha) setFormErrors((prev) => ({ ...prev, senha: "" }));
+            }}
+            placeholder="Mínimo 6 caracteres"
+            required={!editingUser}
+          />
+
+          {/* PERFIL & SITUAÇÃO */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Select
+              label="Perfil de Acesso"
+              value={formData.perfil}
+              error={formErrors.perfil}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, perfil: val as Perfil }));
+                if (formErrors.perfil) setFormErrors((prev) => ({ ...prev, perfil: "" }));
+              }}
+              options={[
+                { value: "ADMIN", label: "Administrador (ADMIN)" },
+                { value: "SECRETARIA", label: "Secretaria" },
+                { value: "PROFESSOR", label: "Professor" },
+                { value: "ALUNO", label: "Aluno" },
+                { value: "COORDENADOR", label: "Coordenador" },
+              ]}
+              required
+            />
+            <Select
+              label="Situação"
+              value={formData.situacao}
+              onChange={(val) => setFormData((prev) => ({ ...prev, situacao: val }))}
+              options={[
+                { value: "ATIVO", label: "Ativo" },
+                { value: "INATIVO", label: "Inativo" },
+                { value: "BLOQUEADO", label: "Bloqueado" },
+              ]}
+              required
+            />
+          </div>
+
+          {/* LIVE SELECTION PREVIEW BOX */}
+          {(formData.nome || formData.email || formData.perfil || formData.situacao) && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3.5 text-xs space-y-2 mt-1">
+              <div className="flex items-center justify-between">
+                <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                  <CheckCircle size={14} />
+                  Resumo do Usuário Selecionado:
+                </p>
+                <Badge label={formData.situacao || "ATIVO"} />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-muted-foreground pt-1 border-t border-primary/10">
+                <div>
+                  <span className="font-medium text-foreground">Nome: </span>
+                  {formData.nome ? (
+                    <span className="text-primary font-semibold">{formData.nome}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não preenchido</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">E-mail: </span>
+                  {formData.email ? (
+                    <span className="text-foreground font-medium">{formData.email}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não informado</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Perfil: </span>
+                  <Badge label={formData.perfil} />
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Senha: </span>
+                  {formData.senha ? (
+                    <span className="font-mono text-emerald-600">●●●●●● (definida)</span>
+                  ) : editingUser ? (
+                    <span className="italic text-muted-foreground">Inalterada</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não informada</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
 
+      {/* CONFIRM DELETE MODAL */}
       <ConfirmModal
         open={confirmId !== null}
         onClose={() => setConfirmId(null)}
-        onConfirm={() => { setConfirmId(null); showToast("Usuário removido.", "error"); }}
+        onConfirm={() => confirmId !== null && handleDelete(confirmId)}
         title="Excluir usuário?"
-        message="Esta ação não poderá ser desfeita. O usuário perderá acesso ao sistema."
+        message="Esta ação não poderá ser desfeita. O usuário perderá o acesso ao sistema."
         confirmLabel="Excluir usuário"
       />
     </div>
@@ -1178,26 +1691,198 @@ function ProfessoresPage({ onNav, showToast }: {
   onNav: (p: Page, id?: number) => void;
   showToast: (m: string, t?: "success" | "error") => void;
 }) {
+  const [professoresList, setProfessoresList] = useState<Professor[]>(() => [...DB.professores]);
   const [search, setSearch] = useState("");
+  const [filterSit, setFilterSit] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [editingProf, setEditingProf] = useState<Professor | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
-  const filtered = DB.professores.filter((p) => {
-    const s = search.toLowerCase();
-    return !s || p.nome_completo.toLowerCase().includes(s) || p.email.toLowerCase().includes(s);
-  });
+  const initialFormState = {
+    id_usuario: "",
+    nome_completo: "",
+    email: "",
+    telefone: "",
+    situacao: "ATIVO",
+  };
+
+  const [formData, setFormData] = useState(initialFormState);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const enrichedProfessores = useMemo(() => {
+    return professoresList.map((p) => {
+      const user = p.id_usuario ? DB.usuarios.find((u) => u.id === p.id_usuario) : null;
+      const profAtends = DB.professores_atendimentos.filter((pa) => pa.id_professor === p.id);
+      return { ...p, user, totalAtendimentos: profAtends.length };
+    });
+  }, [professoresList]);
+
+  const filtered = useMemo(() => {
+    return enrichedProfessores.filter((p) => {
+      const s = search.toLowerCase().trim();
+      const matchSearch =
+        !s ||
+        p.nome_completo.toLowerCase().includes(s) ||
+        p.email.toLowerCase().includes(s) ||
+        (p.telefone && p.telefone.toLowerCase().includes(s)) ||
+        (p.user && p.user.nome.toLowerCase().includes(s));
+      const matchSit = !filterSit || p.situacao === filterSit;
+      return matchSearch && matchSit;
+    });
+  }, [enrichedProfessores, search, filterSit]);
+
+  const handleOpenCreateModal = () => {
+    setFormData(initialFormState);
+    setFormErrors({});
+    setEditingProf(null);
+    setShowModal(true);
+  };
+
+  const handleOpenEditModal = (prof: Professor) => {
+    setFormData({
+      id_usuario: prof.id_usuario ? String(prof.id_usuario) : "",
+      nome_completo: prof.nome_completo,
+      email: prof.email,
+      telefone: prof.telefone || "",
+      situacao: prof.situacao || "ATIVO",
+    });
+    setFormErrors({});
+    setEditingProf(prof);
+    setShowModal(true);
+  };
+
+  const handleUsuarioChange = (userIdStr: string) => {
+    const selectedUser = DB.usuarios.find((u) => String(u.id) === userIdStr);
+    setFormData((prev) => {
+      const prevUser = DB.usuarios.find((u) => String(u.id) === prev.id_usuario);
+      const shouldUpdateNome = !prev.nome_completo.trim() || (prevUser && prev.nome_completo === prevUser.nome);
+      const shouldUpdateEmail = !prev.email.trim() || (prevUser && prev.email === prevUser.email);
+
+      return {
+        ...prev,
+        id_usuario: userIdStr,
+        nome_completo: selectedUser && shouldUpdateNome ? selectedUser.nome : (selectedUser && !prev.nome_completo ? selectedUser.nome : prev.nome_completo),
+        email: selectedUser && shouldUpdateEmail ? selectedUser.email : (selectedUser && !prev.email ? selectedUser.email : prev.email),
+      };
+    });
+    if (formErrors.nome_completo) setFormErrors((prev) => ({ ...prev, nome_completo: "" }));
+    if (formErrors.email) setFormErrors((prev) => ({ ...prev, email: "" }));
+    if (formErrors.id_usuario) setFormErrors((prev) => ({ ...prev, id_usuario: "" }));
+  };
+
+  const handleSave = () => {
+    const errors: Record<string, string> = {};
+    if (!formData.nome_completo.trim()) {
+      errors.nome_completo = "Informe o nome completo do professor";
+    }
+    if (!formData.email.trim()) {
+      errors.email = "Informe o e-mail";
+    } else if (!formData.email.includes("@")) {
+      errors.email = "Informe um e-mail válido";
+    }
+
+    const duplicateEmail = DB.professores.find(
+      (p) => p.email.toLowerCase() === formData.email.trim().toLowerCase() && (!editingProf || p.id !== editingProf.id)
+    );
+    if (duplicateEmail) {
+      errors.email = "Este e-mail já está cadastrado para outro professor";
+    }
+
+    if (formData.id_usuario) {
+      const duplicateUser = DB.professores.find(
+        (p) => String(p.id_usuario) === formData.id_usuario && (!editingProf || p.id !== editingProf.id)
+      );
+      if (duplicateUser) {
+        errors.id_usuario = `Este usuário já está vinculado ao professor ${duplicateUser.nome_completo}`;
+      }
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      showToast("Preencha todos os campos obrigatórios corretamente.", "error");
+      return;
+    }
+
+    if (editingProf) {
+      const idx = DB.professores.findIndex((p) => p.id === editingProf.id);
+      if (idx !== -1) {
+        DB.professores[idx] = {
+          ...DB.professores[idx],
+          nome_completo: formData.nome_completo.trim(),
+          email: formData.email.trim(),
+          telefone: formData.telefone.trim(),
+          id_usuario: formData.id_usuario ? Number(formData.id_usuario) : null,
+          situacao: formData.situacao || "ATIVO",
+        };
+      }
+      setProfessoresList([...DB.professores]);
+      setShowModal(false);
+      setEditingProf(null);
+      showToast("Professor atualizado com sucesso!");
+    } else {
+      const nextId = DB.professores.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+      const newProf: Professor = {
+        id: nextId,
+        id_usuario: formData.id_usuario ? Number(formData.id_usuario) : null,
+        nome_completo: formData.nome_completo.trim(),
+        email: formData.email.trim(),
+        telefone: formData.telefone.trim(),
+        data_cadastro: new Date().toISOString().split("T")[0],
+        situacao: formData.situacao || "ATIVO",
+      };
+
+      DB.professores.unshift(newProf);
+      setProfessoresList([...DB.professores]);
+      setShowModal(false);
+      showToast("Professor cadastrado com sucesso!");
+    }
+  };
+
+  const handleDelete = (id: number) => {
+    const idx = DB.professores.findIndex((p) => p.id === id);
+    if (idx !== -1) {
+      DB.professores.splice(idx, 1);
+      const relIndices = DB.professores_atendimentos
+        .map((pa, i) => (pa.id_professor === id ? i : -1))
+        .filter((i) => i !== -1);
+      for (let i = relIndices.length - 1; i >= 0; i--) {
+        DB.professores_atendimentos.splice(relIndices[i], 1);
+      }
+      setProfessoresList([...DB.professores]);
+      setConfirmDeleteId(null);
+      showToast("Professor excluído com sucesso.");
+    }
+  };
+
+  const previewUser = DB.usuarios.find((u) => String(u.id) === formData.id_usuario);
 
   return (
     <div>
       <Breadcrumb items={[{ label: "Gestão Acadêmica" }, { label: "Professores" }]} />
       <PageHeader
         title="Professores"
-        sub={`${DB.professores.length} professores cadastrados`}
-        action={<Btn icon={<Plus size={14} />} onClick={() => setShowModal(true)}>Novo Professor</Btn>}
+        sub={`${professoresList.length} professores cadastrados`}
+        action={<Btn icon={<Plus size={14} />} onClick={handleOpenCreateModal}>Novo Professor</Btn>}
       />
       <Card>
-        <div className="p-3 border-b border-border">
-          <SearchBar value={search} onChange={setSearch} placeholder="Buscar professor..." />
+        <div className="flex flex-wrap gap-2 p-3 border-b border-border items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center">
+            <SearchBar value={search} onChange={setSearch} placeholder="Buscar professor por nome, e-mail..." />
+            <select
+              value={filterSit}
+              onChange={(e) => setFilterSit(e.target.value)}
+              className="border border-border rounded px-2.5 py-1.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Todas as situações</option>
+              <option value="ATIVO">Ativo</option>
+              <option value="INATIVO">Inativo</option>
+            </select>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            Exibindo {filtered.length} de {professoresList.length} professores
+          </span>
         </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -1211,14 +1896,30 @@ function ProfessoresPage({ onNav, showToast }: {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <EmptyState message="Nenhum professor encontrado." />
+                  </td>
+                </tr>
+              )}
               {filtered.map((p) => (
-                <tr key={p.id} className="hover:bg-accent/40 transition">
-                  <td className="px-4 py-3 font-medium">{p.nome_completo}</td>
+                <tr
+                  key={p.id}
+                  className="hover:bg-accent/40 transition cursor-pointer"
+                  onClick={() => onNav("professor-detalhe", p.id)}
+                >
+                  <td className="px-4 py-3 font-medium">
+                    <div className="font-semibold text-foreground">{p.nome_completo}</div>
+                    {p.user && (
+                      <div className="text-[11px] text-muted-foreground">Usuário: {p.user.email}</div>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-muted-foreground">{p.email}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{p.telefone}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{p.telefone || "—"}</td>
                   <td className="px-4 py-3 text-muted-foreground">{fmtDate(p.data_cadastro)}</td>
                   <td className="px-4 py-3"><Badge label={p.situacao} /></td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-1 justify-center">
                       <button
                         className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-primary"
@@ -1227,8 +1928,19 @@ function ProfessoresPage({ onNav, showToast }: {
                       >
                         <Eye size={13} />
                       </button>
-                      <button className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground" title="Editar">
+                      <button
+                        className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"
+                        title="Editar"
+                        onClick={() => handleOpenEditModal(p)}
+                      >
                         <Edit2 size={13} />
+                      </button>
+                      <button
+                        className="p-1 hover:bg-red-50 rounded transition text-muted-foreground hover:text-red-600"
+                        title="Excluir"
+                        onClick={() => setConfirmDeleteId(p.id)}
+                      >
+                        <Trash2 size={13} />
                       </button>
                     </div>
                   </td>
@@ -1239,27 +1951,145 @@ function ProfessoresPage({ onNav, showToast }: {
         </div>
       </Card>
 
+      {/* MODAL NOVO / EDITAR PROFESSOR */}
       <Modal
         open={showModal}
-        title="Novo Professor"
-        onClose={() => setShowModal(false)}
+        title={editingProf ? `Editar Professor #${editingProf.id}` : "Novo Professor"}
+        onClose={() => { setShowModal(false); setEditingProf(null); }}
         footer={
           <>
-            <Btn variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Btn>
-            <Btn onClick={() => { setShowModal(false); showToast("Professor cadastrado com sucesso!"); }}>Salvar</Btn>
+            <Btn variant="secondary" onClick={() => { setShowModal(false); setEditingProf(null); }}>Cancelar</Btn>
+            <Btn onClick={handleSave}>{editingProf ? "Atualizar" : "Salvar"}</Btn>
           </>
         }
       >
-        <div className="flex flex-col gap-3">
-          <Select label="Usuário vinculado" value="" onChange={() => { }}
-            options={DB.usuarios.filter((u) => u.perfil === "PROFESSOR").map((u) => ({ value: String(u.id), label: u.nome }))} required />
-          <Input label="Nome completo" value="" onChange={() => { }} placeholder="Nome do professor" required />
-          <Input label="E-mail" value="" onChange={() => { }} type="email" required />
-          <Input label="Telefone" value="" onChange={() => { }} placeholder="(00) 00000-0000" />
-          <Select label="Situação" value="" onChange={() => { }}
-            options={[{ value: "ATIVO", label: "Ativo" }, { value: "INATIVO", label: "Inativo" }]} />
+        <div className="flex flex-col gap-3.5">
+          {/* USUÁRIO VINCULADO */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+              Acesso ao Sistema (Opcional)
+            </p>
+            <Select
+              label="Usuário vinculado"
+              value={formData.id_usuario}
+              onChange={handleUsuarioChange}
+              error={formErrors.id_usuario}
+              options={[
+                ...DB.usuarios
+                  .filter((u) => u.perfil === "PROFESSOR")
+                  .map((u) => ({ value: String(u.id), label: `${u.nome} (PROFESSOR - ${u.email})` })),
+                ...DB.usuarios
+                  .filter((u) => u.perfil !== "PROFESSOR")
+                  .map((u) => ({ value: String(u.id), label: `${u.nome} (${u.perfil} - ${u.email})` })),
+              ]}
+            />
+          </div>
+
+          {/* NOME COMPLETO */}
+          <Input
+            label="Nome completo"
+            value={formData.nome_completo}
+            error={formErrors.nome_completo}
+            onChange={(val) => {
+              setFormData((prev) => ({ ...prev, nome_completo: val }));
+              if (formErrors.nome_completo) setFormErrors((prev) => ({ ...prev, nome_completo: "" }));
+            }}
+            placeholder="Nome completo do professor"
+            required
+          />
+
+          {/* E-MAIL & TELEFONE */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input
+              label="E-mail"
+              type="email"
+              value={formData.email}
+              error={formErrors.email}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, email: val }));
+                if (formErrors.email) setFormErrors((prev) => ({ ...prev, email: "" }));
+              }}
+              placeholder="professor@univale.br"
+              required
+            />
+            <Input
+              label="Telefone / WhatsApp"
+              value={formData.telefone}
+              onChange={(val) => setFormData((prev) => ({ ...prev, telefone: val }))}
+              placeholder="(11) 99999-9999"
+            />
+          </div>
+
+          {/* SITUAÇÃO */}
+          <Select
+            label="Situação"
+            value={formData.situacao}
+            onChange={(val) => setFormData((prev) => ({ ...prev, situacao: val }))}
+            options={[
+              { value: "ATIVO", label: "Ativo" },
+              { value: "INATIVO", label: "Inativo" },
+            ]}
+            required
+          />
+
+          {/* LIVE SELECTION PREVIEW BOX */}
+          {(formData.nome_completo || formData.email || formData.telefone || formData.id_usuario || formData.situacao) && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3.5 text-xs space-y-2 mt-1">
+              <div className="flex items-center justify-between">
+                <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                  <CheckCircle size={14} />
+                  Resumo do Professor Selecionado:
+                </p>
+                <Badge label={formData.situacao || "ATIVO"} />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-muted-foreground pt-1 border-t border-primary/10">
+                <div>
+                  <span className="font-medium text-foreground">Nome completo: </span>
+                  {formData.nome_completo ? (
+                    <span className="text-primary font-semibold">{formData.nome_completo}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não preenchido</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">E-mail: </span>
+                  {formData.email ? (
+                    <span className="text-foreground font-medium">{formData.email}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não informado</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Telefone: </span>
+                  {formData.telefone ? (
+                    <span className="text-foreground">{formData.telefone}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não informado</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Usuário vinculado: </span>
+                  {previewUser ? (
+                    <span className="text-foreground font-medium">{previewUser.nome} ({previewUser.perfil})</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Nenhum (avulso)</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
+
+      {/* CONFIRM DELETE MODAL */}
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={() => confirmDeleteId !== null && handleDelete(confirmDeleteId)}
+        title="Excluir professor?"
+        message="Esta ação não poderá ser desfeita. O professor e seus vínculos de atendimentos serão removidos."
+        confirmLabel="Excluir professor"
+      />
     </div>
   );
 }
@@ -1269,16 +2099,71 @@ function ProfessorDetalhePage({ id, onBack, onNav, showToast }: {
   onNav: (p: Page, id?: number) => void;
   showToast?: (m: string, t?: "success" | "error") => void;
 }) {
+  const [, setTick] = useState(0);
+  const [showEditModal, setShowEditModal] = useState(false);
   const prof = DB.professores.find((p) => p.id === id);
   if (!prof) return <div>Professor não encontrado.</div>;
 
   const profAtends = DB.professores_atendimentos.filter((pa) => pa.id_professor === prof.id);
   const atends = DB.atendimentos.filter((a) => profAtends.some((pa) => pa.id_atendimento === a.id));
-  const user = DB.usuarios.find((u) => u.id === prof.id_usuario);
+  const user = prof.id_usuario ? DB.usuarios.find((u) => u.id === prof.id_usuario) : null;
+
+  const [formData, setFormData] = useState({
+    id_usuario: prof.id_usuario ? String(prof.id_usuario) : "",
+    nome_completo: prof.nome_completo,
+    email: prof.email,
+    telefone: prof.telefone || "",
+    situacao: prof.situacao || "ATIVO",
+  });
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const toggleSituacao = () => {
+    prof.situacao = prof.situacao === "ATIVO" ? "INATIVO" : "ATIVO";
+    setTick((t) => t + 1);
+    if (showToast) showToast(`Situação do professor alterada para ${prof.situacao}.`);
+  };
+
+  const handleOpenEdit = () => {
+    setFormData({
+      id_usuario: prof.id_usuario ? String(prof.id_usuario) : "",
+      nome_completo: prof.nome_completo,
+      email: prof.email,
+      telefone: prof.telefone || "",
+      situacao: prof.situacao || "ATIVO",
+    });
+    setFormErrors({});
+    setShowEditModal(true);
+  };
+
+  const handleSaveEdit = () => {
+    const errors: Record<string, string> = {};
+    if (!formData.nome_completo.trim()) {
+      errors.nome_completo = "Informe o nome completo";
+    }
+    if (!formData.email.trim()) {
+      errors.email = "Informe o e-mail";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      if (showToast) showToast("Preencha todos os campos obrigatórios.", "error");
+      return;
+    }
+
+    prof.nome_completo = formData.nome_completo.trim();
+    prof.email = formData.email.trim();
+    prof.telefone = formData.telefone.trim();
+    prof.id_usuario = formData.id_usuario ? Number(formData.id_usuario) : null;
+    prof.situacao = formData.situacao || "ATIVO";
+
+    setTick((t) => t + 1);
+    setShowEditModal(false);
+    if (showToast) showToast("Professor atualizado com sucesso!");
+  };
 
   return (
     <div>
-      <Breadcrumb items={[{ label: "Gestão Acadêmica" }, { label: "Professores" }, { label: prof.nome_completo }]} />
+      <Breadcrumb items={[{ label: "Gestão Acadêmica" }, { label: "Professores", page: "professores" }, { label: prof.nome_completo }]} />
       <div className="flex items-center gap-3 mb-5">
         <button onClick={onBack} className="p-1.5 hover:bg-accent rounded-lg transition text-muted-foreground hover:text-foreground">
           <ArrowLeft size={16} />
@@ -1288,7 +2173,12 @@ function ProfessorDetalhePage({ id, onBack, onNav, showToast }: {
           <p className="text-sm text-muted-foreground">Detalhes do professor</p>
         </div>
         <div className="ml-auto flex gap-2">
-          <Btn variant="secondary" size="sm" icon={<Edit2 size={13} />}>Editar</Btn>
+          <Btn variant="secondary" size="sm" icon={<Edit2 size={13} />} onClick={handleOpenEdit}>
+            Editar
+          </Btn>
+          <Btn variant="secondary" size="sm" icon={<RefreshCw size={13} />} onClick={toggleSituacao}>
+            Alternar Situação
+          </Btn>
           <Badge label={prof.situacao} />
         </div>
       </div>
@@ -1299,15 +2189,15 @@ function ProfessorDetalhePage({ id, onBack, onNav, showToast }: {
           <div className="grid grid-cols-2 gap-x-6">
             <InfoRow label="Nome completo" value={prof.nome_completo} />
             <InfoRow label="E-mail" value={prof.email} />
-            <InfoRow label="Telefone" value={prof.telefone} />
+            <InfoRow label="Telefone" value={prof.telefone || "—"} />
             <InfoRow label="Data de cadastro" value={fmtDate(prof.data_cadastro)} />
           </div>
         </Card>
         <Card className="p-4">
           <h3 className="font-semibold text-sm mb-3">Acesso ao Sistema</h3>
-          <InfoRow label="Usuário" value={user?.nome} />
-          <InfoRow label="Perfil" value={<Badge label={user?.perfil ?? ""} />} />
-          <InfoRow label="Situação" value={<Badge label={user?.situacao ?? ""} />} />
+          <InfoRow label="Usuário" value={user ? user.nome : <span className="italic text-muted-foreground">Sem usuário vinculado</span>} />
+          <InfoRow label="Perfil" value={user ? <Badge label={user.perfil} /> : "—"} />
+          <InfoRow label="Situação da Conta" value={user ? <Badge label={user.situacao} /> : "—"} />
         </Card>
       </div>
 
@@ -1356,6 +2246,81 @@ function ProfessorDetalhePage({ id, onBack, onNav, showToast }: {
           </div>
         )}
       </Card>
+
+      {/* EDIT MODAL IN DETAIL PAGE */}
+      <Modal
+        open={showEditModal}
+        title={`Editar Professor #${prof.id}`}
+        onClose={() => setShowEditModal(false)}
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setShowEditModal(false)}>Cancelar</Btn>
+            <Btn onClick={handleSaveEdit}>Atualizar</Btn>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3.5">
+          <Select
+            label="Usuário vinculado"
+            value={formData.id_usuario}
+            onChange={(val) => {
+              const selectedUser = DB.usuarios.find((u) => String(u.id) === val);
+              setFormData((prev) => ({
+                ...prev,
+                id_usuario: val,
+                nome_completo: selectedUser && !prev.nome_completo ? selectedUser.nome : prev.nome_completo,
+                email: selectedUser && !prev.email ? selectedUser.email : prev.email,
+              }));
+            }}
+            options={[
+              ...DB.usuarios
+                .filter((u) => u.perfil === "PROFESSOR")
+                .map((u) => ({ value: String(u.id), label: `${u.nome} (PROFESSOR - ${u.email})` })),
+              ...DB.usuarios
+                .filter((u) => u.perfil !== "PROFESSOR")
+                .map((u) => ({ value: String(u.id), label: `${u.nome} (${u.perfil} - ${u.email})` })),
+            ]}
+          />
+          <Input
+            label="Nome completo"
+            value={formData.nome_completo}
+            error={formErrors.nome_completo}
+            onChange={(val) => {
+              setFormData((prev) => ({ ...prev, nome_completo: val }));
+              if (formErrors.nome_completo) setFormErrors((prev) => ({ ...prev, nome_completo: "" }));
+            }}
+            required
+          />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input
+              label="E-mail"
+              type="email"
+              value={formData.email}
+              error={formErrors.email}
+              onChange={(val) => {
+                setFormData((prev) => ({ ...prev, email: val }));
+                if (formErrors.email) setFormErrors((prev) => ({ ...prev, email: "" }));
+              }}
+              required
+            />
+            <Input
+              label="Telefone / WhatsApp"
+              value={formData.telefone}
+              onChange={(val) => setFormData((prev) => ({ ...prev, telefone: val }))}
+            />
+          </div>
+          <Select
+            label="Situação"
+            value={formData.situacao}
+            onChange={(val) => setFormData((prev) => ({ ...prev, situacao: val }))}
+            options={[
+              { value: "ATIVO", label: "Ativo" },
+              { value: "INATIVO", label: "Inativo" },
+            ]}
+            required
+          />
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -5256,168 +6221,1198 @@ function ClinicasPage({ showToast }: { showToast: (m: string, t?: "success" | "e
 // EXAMES PAGE
 // ============================================================
 function ExamesPage({ showToast }: { showToast: (m: string, t?: "success" | "error") => void }) {
+  const [examesList, setExamesList] = useState<Exame[]>(() => [...DB.exames]);
+  const [clinicasExamesList, setClinicasExamesList] = useState<ClinicaExame[]>(() => [...DB.clinicas_exames]);
+
+  const [searchExame, setSearchExame] = useState("");
+  const [filterSit, setFilterSit] = useState("");
+  const [searchRel, setSearchRel] = useState("");
+
   const [showModal, setShowModal] = useState(false);
   const [showRelModal, setShowRelModal] = useState(false);
+
+  const [editingExame, setEditingExame] = useState<Exame | null>(null);
+  const [editingRel, setEditingRel] = useState<ClinicaExame | null>(null);
+
+  const [confirmDeleteExameId, setConfirmDeleteExameId] = useState<number | null>(null);
+  const [confirmDeleteRelId, setConfirmDeleteRelId] = useState<number | null>(null);
+
+  // Form states
+  const initialExameForm = {
+    exame: "",
+    situacao: "ATIVO",
+    id_clinica: "",
+    resultado_obs: "",
+  };
+  const [exameFormData, setExameFormData] = useState(initialExameForm);
+  const [exameFormErrors, setExameFormErrors] = useState<Record<string, string>>({});
+
+  const initialRelForm = {
+    id_clinica: "",
+    id_exame: "",
+    resultado_obs: "",
+    path_documento: "",
+  };
+  const [relFormData, setRelFormData] = useState(initialRelForm);
+  const [relFormErrors, setRelFormErrors] = useState<Record<string, string>>({});
+
+  // Filtered Exames
+  const filteredExames = useMemo(() => {
+    return examesList.filter((e) => {
+      const s = searchExame.toLowerCase().trim();
+      const matchSearch = !s || e.exame.toLowerCase().includes(s);
+      const matchSit = !filterSit || e.situacao === filterSit;
+      return matchSearch && matchSit;
+    });
+  }, [examesList, searchExame, filterSit]);
+
+  // Enriched & Filtered Relations
+  const enrichedRelations = useMemo(() => {
+    return clinicasExamesList.map((ce) => {
+      const clin = DB.clinicas.find((c) => c.id === ce.id_clinica);
+      const exame = DB.exames.find((e) => e.id === ce.id_exame);
+      return { ...ce, clin, exame };
+    });
+  }, [clinicasExamesList, examesList]);
+
+  const filteredRelations = useMemo(() => {
+    return enrichedRelations.filter((ce) => {
+      const s = searchRel.toLowerCase().trim();
+      return (
+        !s ||
+        (ce.exame?.exame && ce.exame.exame.toLowerCase().includes(s)) ||
+        (ce.clin?.clinica && ce.clin.clinica.toLowerCase().includes(s)) ||
+        (ce.resultado_obs && ce.resultado_obs.toLowerCase().includes(s))
+      );
+    });
+  }, [enrichedRelations, searchRel]);
+
+  // Open Create / Edit Exame
+  const handleOpenCreateExame = () => {
+    setExameFormData(initialExameForm);
+    setExameFormErrors({});
+    setEditingExame(null);
+    setShowModal(true);
+  };
+
+  const handleOpenEditExame = (e: Exame) => {
+    setExameFormData({
+      exame: e.exame,
+      situacao: e.situacao || "ATIVO",
+      id_clinica: "",
+      resultado_obs: "",
+    });
+    setExameFormErrors({});
+    setEditingExame(e);
+    setShowModal(true);
+  };
+
+  // Open Create / Edit Relation
+  const handleOpenCreateRel = () => {
+    setRelFormData(initialRelForm);
+    setRelFormErrors({});
+    setEditingRel(null);
+    setShowRelModal(true);
+  };
+
+  const handleOpenEditRel = (ce: ClinicaExame) => {
+    setRelFormData({
+      id_clinica: String(ce.id_clinica),
+      id_exame: String(ce.id_exame),
+      resultado_obs: ce.resultado_obs || "",
+      path_documento: ce.path_documento || "",
+    });
+    setRelFormErrors({});
+    setEditingRel(ce);
+    setShowRelModal(true);
+  };
+
+  // Save Exame
+  const handleSaveExame = () => {
+    const errors: Record<string, string> = {};
+    if (!exameFormData.exame.trim()) {
+      errors.exame = "Informe o nome do exame";
+    }
+
+    const duplicate = DB.exames.find(
+      (e) => e.exame.toLowerCase() === exameFormData.exame.trim().toLowerCase() && (!editingExame || e.id !== editingExame.id)
+    );
+    if (duplicate) {
+      errors.exame = "Já existe um exame cadastrado com este nome";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setExameFormErrors(errors);
+      showToast("Preencha todos os campos obrigatórios corretamente.", "error");
+      return;
+    }
+
+    if (editingExame) {
+      const idx = DB.exames.findIndex((e) => e.id === editingExame.id);
+      if (idx !== -1) {
+        DB.exames[idx] = {
+          ...DB.exames[idx],
+          exame: exameFormData.exame.trim(),
+          situacao: exameFormData.situacao || "ATIVO",
+        };
+      }
+      setExamesList([...DB.exames]);
+      setShowModal(false);
+      setEditingExame(null);
+      showToast("Exame atualizado com sucesso!");
+    } else {
+      const nextId = DB.exames.reduce((m, e) => Math.max(m, e.id), 0) + 1;
+      const newExame: Exame = {
+        id: nextId,
+        exame: exameFormData.exame.trim(),
+        situacao: exameFormData.situacao || "ATIVO",
+      };
+
+      DB.exames.unshift(newExame);
+
+      // If initial clinic selected, also create relation
+      if (exameFormData.id_clinica) {
+        const nextRelId = DB.clinicas_exames.reduce((m, r) => Math.max(m, r.id), 0) + 1;
+        DB.clinicas_exames.unshift({
+          id: nextRelId,
+          id_exame: nextId,
+          id_clinica: Number(exameFormData.id_clinica),
+          resultado_obs: exameFormData.resultado_obs.trim(),
+          path_documento: null,
+        });
+        setClinicasExamesList([...DB.clinicas_exames]);
+      }
+
+      setExamesList([...DB.exames]);
+      setShowModal(false);
+      showToast("Exame cadastrado com sucesso!");
+    }
+  };
+
+  // Delete Exame
+  const handleDeleteExame = (id: number) => {
+    const idx = DB.exames.findIndex((e) => e.id === id);
+    if (idx !== -1) {
+      DB.exames.splice(idx, 1);
+      // Remove any clinicas_exames relations
+      for (let i = DB.clinicas_exames.length - 1; i >= 0; i--) {
+        if (DB.clinicas_exames[i].id_exame === id) {
+          DB.clinicas_exames.splice(i, 1);
+        }
+      }
+      setExamesList([...DB.exames]);
+      setClinicasExamesList([...DB.clinicas_exames]);
+      setConfirmDeleteExameId(null);
+      showToast("Exame excluído com sucesso.");
+    }
+  };
+
+  // Save Relation
+  const handleSaveRelation = () => {
+    const errors: Record<string, string> = {};
+    if (!relFormData.id_clinica) errors.id_clinica = "Selecione uma clínica";
+    if (!relFormData.id_exame) errors.id_exame = "Selecione um exame";
+
+    const duplicate = DB.clinicas_exames.find(
+      (ce) =>
+        ce.id_clinica === Number(relFormData.id_clinica) &&
+        ce.id_exame === Number(relFormData.id_exame) &&
+        (!editingRel || ce.id !== editingRel.id)
+    );
+    if (duplicate) {
+      errors.id_exame = "Esta relação clínica/exame já existe";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setRelFormErrors(errors);
+      showToast("Selecione a clínica e o exame obrigatórios.", "error");
+      return;
+    }
+
+    if (editingRel) {
+      const idx = DB.clinicas_exames.findIndex((ce) => ce.id === editingRel.id);
+      if (idx !== -1) {
+        DB.clinicas_exames[idx] = {
+          ...DB.clinicas_exames[idx],
+          id_clinica: Number(relFormData.id_clinica),
+          id_exame: Number(relFormData.id_exame),
+          resultado_obs: relFormData.resultado_obs.trim(),
+          path_documento: relFormData.path_documento.trim() || null,
+        };
+      }
+      setClinicasExamesList([...DB.clinicas_exames]);
+      setShowRelModal(false);
+      setEditingRel(null);
+      showToast("Relação clínica/exame atualizada com sucesso!");
+    } else {
+      const nextId = DB.clinicas_exames.reduce((m, r) => Math.max(m, r.id), 0) + 1;
+      const newRel: ClinicaExame = {
+        id: nextId,
+        id_clinica: Number(relFormData.id_clinica),
+        id_exame: Number(relFormData.id_exame),
+        resultado_obs: relFormData.resultado_obs.trim(),
+        path_documento: relFormData.path_documento.trim() || null,
+      };
+
+      DB.clinicas_exames.unshift(newRel);
+      setClinicasExamesList([...DB.clinicas_exames]);
+      setShowRelModal(false);
+      showToast("Relação clínica/exame cadastrada com sucesso!");
+    }
+  };
+
+  // Delete Relation
+  const handleDeleteRelation = (id: number) => {
+    const idx = DB.clinicas_exames.findIndex((ce) => ce.id === id);
+    if (idx !== -1) {
+      DB.clinicas_exames.splice(idx, 1);
+      setClinicasExamesList([...DB.clinicas_exames]);
+      setConfirmDeleteRelId(null);
+      showToast("Relação clínica/exame removida com sucesso.");
+    }
+  };
+
+  // Quick document attach simulation
+  const handleAttachDoc = (ceId: number) => {
+    const idx = DB.clinicas_exames.findIndex((ce) => ce.id === ceId);
+    if (idx !== -1) {
+      const exameObj = DB.exames.find((e) => e.id === DB.clinicas_exames[idx].id_exame);
+      const cleanName = (exameObj?.exame || "exame").toLowerCase().replace(/\s+/g, "_");
+      DB.clinicas_exames[idx].path_documento = `doc_${cleanName}_${Date.now().toString().slice(-4)}.pdf`;
+      setClinicasExamesList([...DB.clinicas_exames]);
+      showToast("Documento anexado com sucesso!");
+    }
+  };
+
+  const handleRemoveDoc = (ceId: number) => {
+    const idx = DB.clinicas_exames.findIndex((ce) => ce.id === ceId);
+    if (idx !== -1) {
+      DB.clinicas_exames[idx].path_documento = null;
+      setClinicasExamesList([...DB.clinicas_exames]);
+      showToast("Documento removido.");
+    }
+  };
+
+  // Previews for modals
+  const previewExameClinica = DB.clinicas.find((c) => String(c.id) === exameFormData.id_clinica);
+  const previewRelClinica = DB.clinicas.find((c) => String(c.id) === relFormData.id_clinica);
+  const previewRelExame = DB.exames.find((e) => String(e.id) === relFormData.id_exame);
 
   return (
     <div>
       <Breadcrumb items={[{ label: "Gestão Clínica" }, { label: "Exames" }]} />
       <PageHeader
         title="Exames"
-        sub="Gerenciamento de exames e relacionamentos clínica/exame"
+        sub={`${examesList.length} exames e ${clinicasExamesList.length} relações clínica/exame cadastradas`}
         action={
           <div className="flex gap-2">
-            <Btn variant="secondary" icon={<Plus size={14} />} onClick={() => setShowRelModal(true)}>Relacionar Clínica/Exame</Btn>
-            <Btn icon={<Plus size={14} />} onClick={() => setShowModal(true)}>Novo Exame</Btn>
+            <Btn variant="secondary" icon={<Plus size={14} />} onClick={handleOpenCreateRel}>
+              Relacionar Clínica/Exame
+            </Btn>
+            <Btn icon={<Plus size={14} />} onClick={handleOpenCreateExame}>
+              Novo Exame
+            </Btn>
           </div>
         }
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card>
-          <div className="px-4 py-3 border-b border-border">
-            <h3 className="font-semibold text-sm">Exames Cadastrados</h3>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* CARD EXAMES CADASTRADOS */}
+        <Card className="flex flex-col">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-border">
+            <div>
+              <h3 className="font-semibold text-sm">Exames Cadastrados</h3>
+              <p className="text-xs text-muted-foreground">{filteredExames.length} de {examesList.length} exames</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <SearchBar value={searchExame} onChange={setSearchExame} placeholder="Buscar exame..." />
+              <select
+                value={filterSit}
+                onChange={(e) => setFilterSit(e.target.value)}
+                className="border border-border rounded px-2.5 py-1.5 text-xs bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+              >
+                <option value="">Todas situações</option>
+                <option value="ATIVO">Ativo</option>
+                <option value="INATIVO">Inativo</option>
+              </select>
+            </div>
           </div>
-          <div className="divide-y divide-border">
-            {DB.exames.map((e) => (
-              <div key={e.id} className="px-4 py-3 flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
-                  <FlaskConical size={14} className="text-amber-600" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">{e.exame}</p>
-                </div>
-                <Badge label={e.situacao} />
-                <button className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground">
-                  <Edit2 size={13} />
-                </button>
+
+          <div className="divide-y divide-border flex-1 overflow-y-auto max-h-[550px]">
+            {filteredExames.length === 0 ? (
+              <div className="py-8">
+                <EmptyState message="Nenhum exame encontrado." />
               </div>
-            ))}
+            ) : (
+              filteredExames.map((e) => {
+                const totalClinicas = clinicasExamesList.filter((ce) => ce.id_exame === e.id).length;
+                return (
+                  <div key={e.id} className="px-4 py-3.5 flex items-center gap-3 hover:bg-accent/40 transition">
+                    <div className="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
+                      <FlaskConical size={15} className="text-amber-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{e.exame}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {totalClinicas === 0 ? "Sem clínica vinculada" : `${totalClinicas} clínica(s) vinculada(s)`}
+                      </p>
+                    </div>
+                    <Badge label={e.situacao} />
+                    <div className="flex items-center gap-1">
+                      <button
+                        className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"
+                        title="Editar Exame"
+                        onClick={() => handleOpenEditExame(e)}
+                      >
+                        <Edit2 size={13} />
+                      </button>
+                      <button
+                        className="p-1 hover:bg-red-50 rounded transition text-muted-foreground hover:text-red-600"
+                        title="Excluir Exame"
+                        onClick={() => setConfirmDeleteExameId(e.id)}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </Card>
 
-        <Card>
-          <div className="px-4 py-3 border-b border-border">
-            <h3 className="font-semibold text-sm">Relações Clínica / Exame</h3>
+        {/* CARD RELAÇÕES CLÍNICA / EXAME */}
+        <Card className="flex flex-col">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-border">
+            <div>
+              <h3 className="font-semibold text-sm">Relações Clínica / Exame</h3>
+              <p className="text-xs text-muted-foreground">{filteredRelations.length} de {clinicasExamesList.length} relações</p>
+            </div>
+            <SearchBar value={searchRel} onChange={setSearchRel} placeholder="Buscar relação..." />
           </div>
-          <div className="divide-y divide-border">
-            {DB.clinicas_exames.map((ce) => {
-              const clin = DB.clinicas.find((c) => c.id === ce.id_clinica);
-              const exame = DB.exames.find((e) => e.id === ce.id_exame);
-              return (
-                <div key={ce.id} className="px-4 py-3">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="text-sm font-medium">{exame?.exame}</p>
-                      <p className="text-xs text-muted-foreground">{clin?.clinica}</p>
-                      {ce.resultado_obs && <p className="text-xs text-muted-foreground italic mt-0.5">{ce.resultado_obs}</p>}
-                    </div>
-                    {ce.path_documento ? (
-                      <div className="flex items-center gap-1.5 px-2 py-1 bg-blue-50 border border-blue-200 rounded text-xs text-blue-700">
-                        <FileText size={11} />
-                        <span className="max-w-[100px] truncate">{ce.path_documento}</span>
-                        <button className="hover:text-blue-500 ml-1" title="Baixar"><Download size={11} /></button>
-                        <button className="hover:text-red-500" title="Remover"><X size={11} /></button>
+
+          <div className="divide-y divide-border flex-1 overflow-y-auto max-h-[550px]">
+            {filteredRelations.length === 0 ? (
+              <div className="py-8">
+                <EmptyState message="Nenhuma relação clínica/exame encontrada." />
+              </div>
+            ) : (
+              filteredRelations.map((ce) => (
+                <div key={ce.id} className="px-4 py-3.5 hover:bg-accent/40 transition">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-foreground truncate">{ce.exame?.exame || "Exame"}</p>
+                        {ce.exame?.situacao && <Badge label={ce.exame.situacao} />}
                       </div>
-                    ) : (
-                      <button className="flex items-center gap-1 text-xs text-primary hover:underline">
-                        <Upload size={11} /> Anexar
-                      </button>
-                    )}
+                      <p className="text-xs font-medium text-primary mt-0.5">{ce.clin?.clinica || "Clínica Geral"}</p>
+                      {ce.resultado_obs ? (
+                        <p className="text-xs text-muted-foreground mt-1 bg-muted/40 p-2 rounded border border-border/60">
+                          {ce.resultado_obs}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground/60 italic mt-0.5">Sem observações adicionais</p>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col items-end gap-2 shrink-0">
+                      <div className="flex items-center gap-1">
+                        <button
+                          className="p-1 hover:bg-accent rounded transition text-muted-foreground hover:text-foreground"
+                          title="Editar relação"
+                          onClick={() => handleOpenEditRel(ce)}
+                        >
+                          <Edit2 size={13} />
+                        </button>
+                        <button
+                          className="p-1 hover:bg-red-50 rounded transition text-muted-foreground hover:text-red-600"
+                          title="Excluir relação"
+                          onClick={() => setConfirmDeleteRelId(ce.id)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+
+                      {ce.path_documento ? (
+                        <div className="flex items-center gap-1.5 px-2 py-1 bg-blue-50 border border-blue-200 rounded text-xs text-blue-700">
+                          <FileText size={11} />
+                          <span className="max-w-[110px] truncate font-medium">{ce.path_documento}</span>
+                          <button
+                            className="hover:text-blue-900 ml-1 transition"
+                            title="Baixar documento"
+                            onClick={() => showToast(`Iniciando download de ${ce.path_documento}`)}
+                          >
+                            <Download size={11} />
+                          </button>
+                          <button
+                            className="hover:text-red-600 transition"
+                            title="Remover documento"
+                            onClick={() => handleRemoveDoc(ce.id)}
+                          >
+                            <X size={11} />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          className="flex items-center gap-1 text-xs text-primary hover:underline px-2 py-1 rounded hover:bg-primary/10 transition"
+                          onClick={() => handleAttachDoc(ce.id)}
+                        >
+                          <Upload size={12} /> Anexar laudo/PDF
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
-              );
-            })}
+              ))
+            )}
           </div>
         </Card>
       </div>
 
+      {/* MODAL NOVO / EDITAR EXAME */}
       <Modal
         open={showModal}
-        title="Novo Exame"
-        onClose={() => setShowModal(false)}
+        title={editingExame ? `Editar Exame #${editingExame.id}` : "Novo Exame"}
+        onClose={() => { setShowModal(false); setEditingExame(null); }}
         footer={
           <>
-            <Btn variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Btn>
-            <Btn onClick={() => { setShowModal(false); showToast("Exame cadastrado!"); }}>Salvar</Btn>
+            <Btn variant="secondary" onClick={() => { setShowModal(false); setEditingExame(null); }}>Cancelar</Btn>
+            <Btn onClick={handleSaveExame}>{editingExame ? "Atualizar" : "Salvar"}</Btn>
           </>
         }
       >
-        <div className="flex flex-col gap-3">
-          <Input label="Nome do Exame" value="" onChange={() => { }} required />
-          <Select label="Situação" value="" onChange={() => { }}
-            options={[{ value: "ATIVO", label: "Ativo" }, { value: "INATIVO", label: "Inativo" }]} />
+        <div className="flex flex-col gap-3.5">
+          {/* NOME DO EXAME */}
+          <Input
+            label="Nome do Exame"
+            value={exameFormData.exame}
+            error={exameFormErrors.exame}
+            onChange={(val) => {
+              setExameFormData((prev) => ({ ...prev, exame: val }));
+              if (exameFormErrors.exame) setExameFormErrors((prev) => ({ ...prev, exame: "" }));
+            }}
+            placeholder="Ex: Audiometria Vocal com Mascaramento"
+            required
+          />
+
+          {/* SITUAÇÃO */}
+          <Select
+            label="Situação"
+            value={exameFormData.situacao}
+            onChange={(val) => setExameFormData((prev) => ({ ...prev, situacao: val }))}
+            options={[
+              { value: "ATIVO", label: "Ativo" },
+              { value: "INATIVO", label: "Inativo" },
+            ]}
+            required
+          />
+
+          {/* VINCULAÇÃO INICIAL (OPCIONAL) QUANDO CRIANDO NOVO EXAME */}
+          {!editingExame && (
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Vinculação a Clínica (Opcional)
+              </p>
+              <div className="flex flex-col gap-2">
+                <Select
+                  label="Vincular à Clínica"
+                  value={exameFormData.id_clinica}
+                  onChange={(val) => setExameFormData((prev) => ({ ...prev, id_clinica: val }))}
+                  options={DB.clinicas.map((c) => ({ value: String(c.id), label: `${c.clinica} (${c.situacao})` }))}
+                />
+                {exameFormData.id_clinica && (
+                  <div className="flex flex-col gap-1 mt-1">
+                    <label className="text-xs font-medium text-foreground">Observação Inicial da Clínica</label>
+                    <input
+                      type="text"
+                      value={exameFormData.resultado_obs}
+                      onChange={(e) => setExameFormData((prev) => ({ ...prev, resultado_obs: e.target.value }))}
+                      placeholder="Ex: Exame padrão para triagem vocal"
+                      className="border border-border rounded px-3 py-1.5 text-xs bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* LIVE SELECTION PREVIEW BOX */}
+          {(exameFormData.exame || exameFormData.situacao || exameFormData.id_clinica) && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3.5 text-xs space-y-2 mt-1">
+              <div className="flex items-center justify-between">
+                <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                  <CheckCircle size={14} />
+                  Resumo do Exame Selecionado:
+                </p>
+                <Badge label={exameFormData.situacao || "ATIVO"} />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-muted-foreground pt-1 border-t border-primary/10">
+                <div className="col-span-full">
+                  <span className="font-medium text-foreground">Nome do Exame: </span>
+                  {exameFormData.exame ? (
+                    <span className="text-primary font-semibold">{exameFormData.exame}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não preenchido</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Situação: </span>
+                  <Badge label={exameFormData.situacao || "ATIVO"} />
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Clínica: </span>
+                  {previewExameClinica ? (
+                    <span className="text-foreground font-medium">{previewExameClinica.clinica}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Nenhuma (avulso)</span>
+                  )}
+                </div>
+                {exameFormData.resultado_obs && (
+                  <div className="col-span-full">
+                    <span className="font-medium text-foreground">Observação: </span>
+                    <span className="text-foreground">{exameFormData.resultado_obs}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
 
+      {/* MODAL RELACIONAR / EDITAR CLÍNICA-EXAME */}
       <Modal
         open={showRelModal}
-        title="Relacionar Clínica / Exame"
-        onClose={() => setShowRelModal(false)}
+        title={editingRel ? `Editar Relação #${editingRel.id}` : "Relacionar Clínica / Exame"}
+        onClose={() => { setShowRelModal(false); setEditingRel(null); }}
         footer={
           <>
-            <Btn variant="secondary" onClick={() => setShowRelModal(false)}>Cancelar</Btn>
-            <Btn onClick={() => { setShowRelModal(false); showToast("Relação cadastrada!"); }}>Salvar</Btn>
+            <Btn variant="secondary" onClick={() => { setShowRelModal(false); setEditingRel(null); }}>Cancelar</Btn>
+            <Btn onClick={handleSaveRelation}>{editingRel ? "Atualizar" : "Salvar"}</Btn>
           </>
         }
       >
-        <div className="flex flex-col gap-3">
-          <Select label="Clínica" value="" onChange={() => { }}
-            options={DB.clinicas.map((c) => ({ value: String(c.id), label: c.clinica }))} required />
-          <Select label="Exame" value="" onChange={() => { }}
-            options={DB.exames.map((e) => ({ value: String(e.id), label: e.exame }))} required />
+        <div className="flex flex-col gap-3.5">
+          <Select
+            label="Clínica"
+            value={relFormData.id_clinica}
+            error={relFormErrors.id_clinica}
+            onChange={(val) => {
+              setRelFormData((prev) => ({ ...prev, id_clinica: val }));
+              if (relFormErrors.id_clinica) setRelFormErrors((prev) => ({ ...prev, id_clinica: "" }));
+            }}
+            options={DB.clinicas.map((c) => ({ value: String(c.id), label: `${c.clinica} (${c.situacao})` }))}
+            required
+          />
+
+          <Select
+            label="Exame"
+            value={relFormData.id_exame}
+            error={relFormErrors.id_exame}
+            onChange={(val) => {
+              setRelFormData((prev) => ({ ...prev, id_exame: val }));
+              if (relFormErrors.id_exame) setRelFormErrors((prev) => ({ ...prev, id_exame: "" }));
+            }}
+            options={examesList.map((e) => ({ value: String(e.id), label: `${e.exame} (${e.situacao})` }))}
+            required
+          />
+
           <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium">Resultado / Observação</label>
+            <label className="text-sm font-medium text-foreground">Resultado / Observação</label>
             <textarea
               rows={3}
+              value={relFormData.resultado_obs}
+              onChange={(e) => setRelFormData((prev) => ({ ...prev, resultado_obs: e.target.value }))}
               className="border border-border rounded px-3 py-1.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
-              placeholder="Resultado ou observação do exame..."
+              placeholder="Resultado padrão, observação técnica ou indicação clínica do exame..."
             />
           </div>
+
           <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium">Documento</label>
-            <div className="border-2 border-dashed border-border rounded-lg p-4 flex flex-col items-center gap-2 text-muted-foreground hover:border-primary/40 transition cursor-pointer">
-              <Upload size={20} className="text-muted-foreground" />
-              <p className="text-xs text-center">Clique para selecionar ou arraste um arquivo<br /><span className="text-[11px]">PDF, DOCX, JPG — máx. 10 MB</span></p>
-            </div>
+            <label className="text-sm font-medium text-foreground">Nome do Documento / Anexo (Opcional)</label>
+            <Input
+              label=""
+              value={relFormData.path_documento}
+              onChange={(val) => setRelFormData((prev) => ({ ...prev, path_documento: val }))}
+              placeholder="Ex: laudo_audiometria_padrao.pdf"
+            />
           </div>
+
+          {/* LIVE SELECTION PREVIEW BOX */}
+          {(relFormData.id_clinica || relFormData.id_exame || relFormData.resultado_obs || relFormData.path_documento) && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3.5 text-xs space-y-2 mt-1">
+              <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                <CheckCircle size={14} />
+                Resumo da Relação Selecionada:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-muted-foreground pt-1 border-t border-primary/10">
+                <div>
+                  <span className="font-medium text-foreground">Clínica: </span>
+                  {previewRelClinica ? (
+                    <span className="text-primary font-semibold">{previewRelClinica.clinica}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não selecionada</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Exame: </span>
+                  {previewRelExame ? (
+                    <span className="text-primary font-semibold">{previewRelExame.exame}</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não selecionado</span>
+                  )}
+                </div>
+                {relFormData.resultado_obs && (
+                  <div className="col-span-full">
+                    <span className="font-medium text-foreground">Observação: </span>
+                    <span className="text-foreground">{relFormData.resultado_obs}</span>
+                  </div>
+                )}
+                {relFormData.path_documento && (
+                  <div className="col-span-full">
+                    <span className="font-medium text-foreground">Anexo: </span>
+                    <span className="text-foreground">{relFormData.path_documento}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
+
+      {/* CONFIRM DELETE EXAME MODAL */}
+      <ConfirmModal
+        open={confirmDeleteExameId !== null}
+        onClose={() => setConfirmDeleteExameId(null)}
+        onConfirm={() => confirmDeleteExameId !== null && handleDeleteExame(confirmDeleteExameId)}
+        title="Excluir Exame?"
+        message="Esta ação não poderá ser desfeita. O exame e suas vinculações com clínicas serão removidos."
+        confirmLabel="Excluir exame"
+      />
+
+      {/* CONFIRM DELETE RELATION MODAL */}
+      <ConfirmModal
+        open={confirmDeleteRelId !== null}
+        onClose={() => setConfirmDeleteRelId(null)}
+        onConfirm={() => confirmDeleteRelId !== null && handleDeleteRelation(confirmDeleteRelId)}
+        title="Excluir Relação Clínica / Exame?"
+        message="Esta ação não poderá ser desfeita. O vínculo entre a clínica e o exame será removido."
+        confirmLabel="Excluir relação"
+      />
     </div>
   );
 }
 
 // ============================================================
-// PERFIL PAGE
+// CONFIGURAÇÕES / PERFIL PAGE
 // ============================================================
-function PerfilPage({ user }: { user: Usuario }) {
+function PerfilPage({
+  user,
+  showToast,
+  onUpdateUser,
+}: {
+  user: Usuario;
+  showToast?: (m: string, t?: "success" | "error") => void;
+  onUpdateUser?: (u: Usuario) => void;
+}) {
+  const [, setTick] = useState(0);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [showEditProfileModal, setShowEditProfileModal] = useState(false);
+
+  // Form password
+  const initialPasswordForm = {
+    senhaAtual: "",
+    novaSenha: "",
+    confirmaSenha: "",
+  };
+  const [pwdFormData, setPwdFormData] = useState(initialPasswordForm);
+  const [pwdFormErrors, setPwdFormErrors] = useState<Record<string, string>>({});
+
+  // Form profile
+  const [profileFormData, setProfileFormData] = useState({
+    nome: user.nome,
+    email: user.email,
+  });
+  const [profileFormErrors, setProfileFormErrors] = useState<Record<string, string>>({});
+
+  // Preferences
+  const [preferences, setPreferences] = useState({
+    notifEmail: true,
+    lembretesAtendimento: true,
+    confirmacaoExclusao: true,
+    densidadeTabela: "padrao",
+  });
+
+  // Handlers for Password Modal
+  const handleOpenPasswordModal = () => {
+    setPwdFormData(initialPasswordForm);
+    setPwdFormErrors({});
+    setShowPasswordModal(true);
+  };
+
+  const handleSavePassword = () => {
+    const errors: Record<string, string> = {};
+    if (!pwdFormData.senhaAtual.trim()) {
+      errors.senhaAtual = "Informe sua senha atual";
+    }
+    if (!pwdFormData.novaSenha.trim()) {
+      errors.novaSenha = "Informe a nova senha";
+    } else if (pwdFormData.novaSenha.length < 6) {
+      errors.novaSenha = "A nova senha deve ter no mínimo 6 caracteres";
+    }
+    if (!pwdFormData.confirmaSenha.trim()) {
+      errors.confirmaSenha = "Confirme a nova senha";
+    } else if (pwdFormData.novaSenha !== pwdFormData.confirmaSenha) {
+      errors.confirmaSenha = "As senhas digitadas não coincidem";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setPwdFormErrors(errors);
+      if (showToast) showToast("Corrija os erros no formulário de senha.", "error");
+      return;
+    }
+
+    setShowPasswordModal(false);
+    setPwdFormData(initialPasswordForm);
+    if (showToast) showToast("Senha alterada com sucesso!");
+  };
+
+  // Handlers for Profile Modal
+  const handleOpenProfileModal = () => {
+    setProfileFormData({
+      nome: user.nome,
+      email: user.email,
+    });
+    setProfileFormErrors({});
+    setShowEditProfileModal(true);
+  };
+
+  const handleSaveProfile = () => {
+    const errors: Record<string, string> = {};
+    if (!profileFormData.nome.trim()) {
+      errors.nome = "Informe seu nome completo";
+    }
+    if (!profileFormData.email.trim()) {
+      errors.email = "Informe seu e-mail";
+    } else if (!profileFormData.email.includes("@")) {
+      errors.email = "Informe um e-mail válido";
+    }
+
+    const duplicateEmail = DB.usuarios.find(
+      (u) => u.email.toLowerCase() === profileFormData.email.trim().toLowerCase() && u.id !== user.id
+    );
+    if (duplicateEmail) {
+      errors.email = "Este e-mail já está em uso por outro usuário";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setProfileFormErrors(errors);
+      if (showToast) showToast("Corrija os campos do perfil.", "error");
+      return;
+    }
+
+    const updatedUser: Usuario = {
+      ...user,
+      nome: profileFormData.nome.trim(),
+      email: profileFormData.email.trim(),
+    };
+
+    const idx = DB.usuarios.findIndex((u) => u.id === user.id);
+    if (idx !== -1) {
+      DB.usuarios[idx] = updatedUser;
+    }
+
+    if (onUpdateUser) onUpdateUser(updatedUser);
+    setTick((t) => t + 1);
+    setShowEditProfileModal(false);
+    if (showToast) showToast("Informações do perfil atualizadas!");
+  };
+
+  const handleSavePreferences = () => {
+    if (showToast) showToast("Preferências salvas com sucesso!");
+  };
+
+  // Password strength calculation
+  const getPasswordStrength = (p: string) => {
+    if (!p) return { label: "Não informada", color: "bg-slate-200 text-slate-500", percent: 0 };
+    if (p.length < 6) return { label: "Muito curta", color: "bg-red-500 text-white", percent: 25 };
+    const hasNum = /\d/.test(p);
+    const hasSpecial = /[^A-Za-z0-9]/.test(p);
+    if (p.length >= 8 && hasNum && hasSpecial) return { label: "Forte", color: "bg-emerald-500 text-white", percent: 100 };
+    if (p.length >= 6 && hasNum) return { label: "Média", color: "bg-amber-500 text-white", percent: 65 };
+    return { label: "Fraca", color: "bg-orange-500 text-white", percent: 45 };
+  };
+
+  const pwdStrength = getPasswordStrength(pwdFormData.novaSenha);
+  const passwordsMatch = pwdFormData.novaSenha && pwdFormData.confirmaSenha && pwdFormData.novaSenha === pwdFormData.confirmaSenha;
+  const passwordsMismatch = pwdFormData.novaSenha && pwdFormData.confirmaSenha && pwdFormData.novaSenha !== pwdFormData.confirmaSenha;
+
   return (
     <div>
-      <Breadcrumb items={[{ label: "Perfil" }]} />
-      <PageHeader title="Meu Perfil" sub="Informações da sua conta" />
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="p-6 flex flex-col items-center gap-3">
-          <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center">
-            <User size={36} className="text-primary" />
+      <Breadcrumb items={[{ label: "Administração" }, { label: "Configurações" }]} />
+      <PageHeader
+        title="Configurações e Perfil"
+        sub="Gerenciamento da sua conta, segurança e preferências de uso"
+        action={
+          <div className="flex gap-2">
+            <Btn variant="secondary" icon={<Lock size={14} />} onClick={handleOpenPasswordModal}>
+              Alterar Senha
+            </Btn>
+            <Btn icon={<Edit2 size={14} />} onClick={handleOpenProfileModal}>
+              Editar Perfil
+            </Btn>
           </div>
-          <div className="text-center">
-            <p className="font-semibold text-lg">{user.nome}</p>
+        }
+      />
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
+        {/* CARD AVATAR & IDENTIFICAÇÃO */}
+        <Card className="p-6 flex flex-col items-center text-center gap-3">
+          <div className="w-20 h-20 rounded-full bg-primary/10 border-2 border-primary/20 flex items-center justify-center text-primary shadow-sm">
+            <User size={36} />
+          </div>
+          <div>
+            <h2 className="font-semibold text-lg text-foreground">{user.nome}</h2>
             <p className="text-sm text-muted-foreground">{user.email}</p>
           </div>
-          <Badge label={user.perfil} />
+          <div className="flex items-center gap-2">
+            <Badge label={user.perfil} />
+            <Badge label={user.situacao} />
+          </div>
+          <div className="w-full pt-4 mt-2 border-t border-border text-xs text-muted-foreground space-y-1">
+            <p>ID da Conta: <span className="font-mono text-foreground font-medium">#{user.id}</span></p>
+            <p>Membro desde: <span className="text-foreground font-medium">{fmtDate(user.data_criacao)}</span></p>
+          </div>
         </Card>
-        <Card className="p-4 col-span-2">
-          <h3 className="font-semibold text-sm mb-3">Informações da Conta</h3>
-          <InfoRow label="Nome" value={user.nome} />
-          <InfoRow label="E-mail" value={user.email} />
-          <InfoRow label="Perfil" value={<Badge label={user.perfil} />} />
-          <InfoRow label="Situação" value={<Badge label={user.situacao} />} />
-          <InfoRow label="Data de cadastro" value={fmtDate(user.data_criacao)} />
-          <div className="mt-4 pt-3 border-t border-border">
-            <Btn variant="secondary" icon={<Lock size={13} />}>Alterar Senha</Btn>
+
+        {/* CARD INFORMAÇÕES DA CONTA */}
+        <Card className="p-5 col-span-2 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-border">
+              <h3 className="font-semibold text-base text-foreground flex items-center gap-2">
+                <Shield size={16} className="text-primary" />
+                Informações da Conta
+              </h3>
+              <button
+                className="text-xs text-primary font-medium hover:underline flex items-center gap-1"
+                onClick={handleOpenProfileModal}
+              >
+                <Edit2 size={12} /> Editar
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
+              <InfoRow label="Nome Completo" value={user.nome} />
+              <InfoRow label="E-mail Institucional" value={user.email} />
+              <InfoRow label="Perfil de Acesso" value={<Badge label={user.perfil} />} />
+              <InfoRow label="Situação do Cadastro" value={<Badge label={user.situacao} />} />
+              <InfoRow label="Data de Criação" value={fmtDate(user.data_criacao)} />
+              <InfoRow
+                label="Status de Autenticação"
+                value={
+                  <span className="inline-flex items-center gap-1 text-emerald-600 font-medium text-xs">
+                    <CheckCircle size={13} /> Acesso Ativo
+                  </span>
+                }
+              />
+            </div>
+          </div>
+
+          <div className="mt-5 pt-4 border-t border-border flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Lock size={14} className="text-primary" />
+              <span>Senha de acesso protegida por criptografia.</span>
+            </div>
+            <Btn variant="secondary" size="sm" icon={<Lock size={13} />} onClick={handleOpenPasswordModal}>
+              Alterar Senha
+            </Btn>
           </div>
         </Card>
       </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* CARD SEGURANÇA E ACESSO */}
+        <Card className="p-5 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-border">
+              <h3 className="font-semibold text-sm text-foreground flex items-center gap-2">
+                <Lock size={16} className="text-primary" />
+                Segurança da Conta
+              </h3>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div className="flex items-center justify-between p-3 bg-muted/40 rounded-lg border border-border">
+                <div>
+                  <p className="font-semibold text-sm text-foreground">Credenciais de Acesso</p>
+                  <p className="text-muted-foreground mt-0.5">Sua senha é utilizada para login no sistema.</p>
+                </div>
+                <Btn variant="secondary" size="sm" icon={<Lock size={12} />} onClick={handleOpenPasswordModal}>
+                  Alterar
+                </Btn>
+              </div>
+
+              <div className="flex items-center justify-between p-3 bg-muted/40 rounded-lg border border-border">
+                <div>
+                  <p className="font-semibold text-sm text-foreground">Perfil e Permissões</p>
+                  <p className="text-muted-foreground mt-0.5">Você possui privilégios de nível <strong>{user.perfil}</strong>.</p>
+                </div>
+                <Badge label={user.perfil} />
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        {/* CARD PREFERÊNCIAS DO SISTEMA */}
+        <Card className="p-5 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-border">
+              <h3 className="font-semibold text-sm text-foreground flex items-center gap-2">
+                <Settings size={16} className="text-primary" />
+                Preferências do Sistema
+              </h3>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <label className="flex items-center justify-between p-2.5 rounded-lg border border-border hover:bg-accent/30 transition cursor-pointer">
+                <div>
+                  <p className="font-medium text-foreground">Notificações no Sistema</p>
+                  <p className="text-muted-foreground">Exibir avisos e confirmações visuais em tempo real</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={preferences.notifEmail}
+                  onChange={(e) => setPreferences((p) => ({ ...p, notifEmail: e.target.checked }))}
+                  className="rounded text-primary focus:ring-primary w-4 h-4"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-2.5 rounded-lg border border-border hover:bg-accent/30 transition cursor-pointer">
+                <div>
+                  <p className="font-medium text-foreground">Lembretes de Atendimento</p>
+                  <p className="text-muted-foreground">Avisos automáticos de horários de atendimento agendados</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={preferences.lembretesAtendimento}
+                  onChange={(e) => setPreferences((p) => ({ ...p, lembretesAtendimento: e.target.checked }))}
+                  className="rounded text-primary focus:ring-primary w-4 h-4"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-2.5 rounded-lg border border-border hover:bg-accent/30 transition cursor-pointer">
+                <div>
+                  <p className="font-medium text-foreground">Confirmação de Exclusão</p>
+                  <p className="text-muted-foreground">Exigir modal de confirmação antes de remover registros</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={preferences.confirmacaoExclusao}
+                  onChange={(e) => setPreferences((p) => ({ ...p, confirmacaoExclusao: e.target.checked }))}
+                  className="rounded text-primary focus:ring-primary w-4 h-4"
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-border flex justify-end">
+            <Btn size="sm" onClick={handleSavePreferences}>
+              Salvar Preferências
+            </Btn>
+          </div>
+        </Card>
+      </div>
+
+      {/* MODAL ALTERAR SENHA */}
+      <Modal
+        open={showPasswordModal}
+        title="Alterar Senha de Acesso"
+        onClose={() => setShowPasswordModal(false)}
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setShowPasswordModal(false)}>Cancelar</Btn>
+            <Btn onClick={handleSavePassword}>Salvar Nova Senha</Btn>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3.5">
+          {/* SENHA ATUAL */}
+          <Input
+            label="Senha Atual"
+            type="password"
+            value={pwdFormData.senhaAtual}
+            error={pwdFormErrors.senhaAtual}
+            onChange={(val) => {
+              setPwdFormData((prev) => ({ ...prev, senhaAtual: val }));
+              if (pwdFormErrors.senhaAtual) setPwdFormErrors((prev) => ({ ...prev, senhaAtual: "" }));
+            }}
+            placeholder="Digite sua senha atual"
+            required
+          />
+
+          {/* NOVA SENHA */}
+          <Input
+            label="Nova Senha"
+            type="password"
+            value={pwdFormData.novaSenha}
+            error={pwdFormErrors.novaSenha}
+            onChange={(val) => {
+              setPwdFormData((prev) => ({ ...prev, novaSenha: val }));
+              if (pwdFormErrors.novaSenha) setPwdFormErrors((prev) => ({ ...prev, novaSenha: "" }));
+            }}
+            placeholder="Mínimo 6 caracteres"
+            required
+          />
+
+          {/* CONFIRMAR NOVA SENHA */}
+          <Input
+            label="Confirmar Nova Senha"
+            type="password"
+            value={pwdFormData.confirmaSenha}
+            error={pwdFormErrors.confirmaSenha}
+            onChange={(val) => {
+              setPwdFormData((prev) => ({ ...prev, confirmaSenha: val }));
+              if (pwdFormErrors.confirmaSenha) setPwdFormErrors((prev) => ({ ...prev, confirmaSenha: "" }));
+            }}
+            placeholder="Repita exatamente a nova senha"
+            required
+          />
+
+          {/* LIVE SELECTION PREVIEW BOX FOR PASSWORD */}
+          {(pwdFormData.senhaAtual || pwdFormData.novaSenha || pwdFormData.confirmaSenha) && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3.5 text-xs space-y-2 mt-1">
+              <div className="flex items-center justify-between">
+                <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                  <CheckCircle size={14} />
+                  Resumo da Alteração de Senha:
+                </p>
+                {pwdFormData.novaSenha && (
+                  <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${pwdStrength.color}`}>
+                    Força: {pwdStrength.label}
+                  </span>
+                )}
+              </div>
+
+              {/* STRENGTH PROGRESS BAR */}
+              {pwdFormData.novaSenha && (
+                <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      pwdStrength.percent <= 25
+                        ? "bg-red-500"
+                        : pwdStrength.percent <= 65
+                        ? "bg-amber-500"
+                        : "bg-emerald-500"
+                    }`}
+                    style={{ width: `${pwdStrength.percent}%` }}
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-muted-foreground pt-1 border-t border-primary/10">
+                <div>
+                  <span className="font-medium text-foreground">Senha Atual: </span>
+                  {pwdFormData.senhaAtual ? (
+                    <span className="text-emerald-600 font-medium">●●●●●● (informada)</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Não digitada</span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Comprimento: </span>
+                  {pwdFormData.novaSenha.length >= 6 ? (
+                    <span className="text-emerald-600 font-medium">{pwdFormData.novaSenha.length} caracteres (válido)</span>
+                  ) : pwdFormData.novaSenha.length > 0 ? (
+                    <span className="text-amber-600 font-medium">{pwdFormData.novaSenha.length}/6 caracteres</span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Mínimo 6 caracteres</span>
+                  )}
+                </div>
+                <div className="col-span-full">
+                  <span className="font-medium text-foreground">Validação das Senhas: </span>
+                  {passwordsMatch ? (
+                    <span className="text-emerald-600 font-semibold inline-flex items-center gap-1">
+                      <CheckCircle size={12} /> As senhas coincidem perfeitamente
+                    </span>
+                  ) : passwordsMismatch ? (
+                    <span className="text-red-500 font-semibold inline-flex items-center gap-1">
+                      <AlertCircle size={12} /> As senhas não coincidem
+                    </span>
+                  ) : (
+                    <span className="italic text-muted-foreground/70">Aguardando confirmação</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* MODAL EDITAR PERFIL */}
+      <Modal
+        open={showEditProfileModal}
+        title="Editar Informações do Perfil"
+        onClose={() => setShowEditProfileModal(false)}
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setShowEditProfileModal(false)}>Cancelar</Btn>
+            <Btn onClick={handleSaveProfile}>Salvar Alterações</Btn>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3.5">
+          <Input
+            label="Nome Completo"
+            value={profileFormData.nome}
+            error={profileFormErrors.nome}
+            onChange={(val) => {
+              setProfileFormData((prev) => ({ ...prev, nome: val }));
+              if (profileFormErrors.nome) setProfileFormErrors((prev) => ({ ...prev, nome: "" }));
+            }}
+            placeholder="Seu nome completo"
+            required
+          />
+
+          <Input
+            label="E-mail Institucional"
+            type="email"
+            value={profileFormData.email}
+            error={profileFormErrors.email}
+            onChange={(val) => {
+              setProfileFormData((prev) => ({ ...prev, email: val }));
+              if (profileFormErrors.email) setProfileFormErrors((prev) => ({ ...prev, email: "" }));
+            }}
+            placeholder="seu.email@univale.br"
+            required
+          />
+
+          {/* LIVE SELECTION PREVIEW BOX */}
+          {(profileFormData.nome || profileFormData.email) && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3.5 text-xs space-y-2 mt-1">
+              <p className="font-semibold text-primary flex items-center gap-1.5 text-xs">
+                <CheckCircle size={14} />
+                Resumo das Alterações de Perfil:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-muted-foreground pt-1 border-t border-primary/10">
+                <div>
+                  <span className="font-medium text-foreground">Nome: </span>
+                  <span className="text-primary font-semibold">{profileFormData.nome || "—"}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">E-mail: </span>
+                  <span className="text-foreground font-medium">{profileFormData.email || "—"}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Perfil: </span>
+                  <Badge label={user.perfil} />
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Situação: </span>
+                  <Badge label={user.situacao} />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -5477,7 +7472,7 @@ export default function App() {
     "atendimento-detalhe": "Detalhe do Atendimento",
     clinicas: "Clínicas",
     exames: "Exames",
-    perfil: "Meu Perfil",
+    perfil: "Configurações",
   };
 
   const renderPage = () => {
@@ -5506,7 +7501,7 @@ export default function App() {
       ) : null;
       case "clinicas": return <ClinicasPage showToast={showToast} />;
       case "exames": return <ExamesPage showToast={showToast} />;
-      case "perfil": return <PerfilPage user={currentUser} />;
+      case "perfil": return <PerfilPage user={currentUser} showToast={showToast} onUpdateUser={setCurrentUser} />;
       default: return null;
     }
   };
@@ -5524,7 +7519,13 @@ export default function App() {
       />
 
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        <Header title={pageTitle[page]} onMenuClick={() => setSidebarCollapsed((c) => !c)} />
+        <Header
+          title={pageTitle[page]}
+          onMenuClick={() => setSidebarCollapsed((c) => !c)}
+          sidebarCollapsed={sidebarCollapsed}
+          onNav={navigate}
+          showToast={showToast}
+        />
 
         <main className="flex-1 overflow-y-auto p-5">
           {renderPage()}
