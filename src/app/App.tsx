@@ -518,7 +518,6 @@ const buildMenu = (perfil: Perfil): MenuGroup[] => {
       group: "Administração",
       items: [
         { label: "Usuários", page: "usuarios", icon: <Shield size={16} /> },
-        { label: "Configurações", page: "perfil", icon: <Settings size={16} /> },
       ],
     },
   ];
@@ -541,9 +540,9 @@ const buildMenu = (perfil: Perfil): MenuGroup[] => {
 // ============================================================
 // SIDEBAR
 // ============================================================
-function Sidebar({ perfil, currentPage, onNav, collapsed, onToggle, onLogout, userName }: {
+function Sidebar({ perfil, currentPage, onNav, collapsed, onToggle }: {
   perfil: Perfil; currentPage: Page; onNav: (p: Page) => void;
-  collapsed: boolean; onToggle: () => void; onLogout: () => void; userName: string;
+  collapsed: boolean; onToggle: () => void;
 }) {
   const menu = buildMenu(perfil);
 
@@ -630,32 +629,6 @@ function Sidebar({ perfil, currentPage, onNav, collapsed, onToggle, onLogout, us
         </div>
       )}
 
-      {/* User */}
-      <div className="border-t border-sidebar-border p-2">
-        <button
-          onClick={() => onNav("perfil")}
-          title={collapsed ? userName : undefined}
-          className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sidebar-accent transition"
-        >
-          <div className="w-7 h-7 rounded-full bg-sidebar-primary flex items-center justify-center shrink-0">
-            <User size={13} className="text-sidebar-primary-foreground" />
-          </div>
-          {!collapsed && (
-            <div className="flex-1 min-w-0 text-left">
-              <p className="text-xs font-medium text-white truncate">{userName}</p>
-              <p className="text-[10px] text-slate-400">{perfil}</p>
-            </div>
-          )}
-        </button>
-        <button
-          onClick={onLogout}
-          title="Sair"
-          className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sidebar-accent text-slate-400 hover:text-white transition text-sm mt-0.5"
-        >
-          <LogOut size={15} className="shrink-0" />
-          {!collapsed && <span>Sair</span>}
-        </button>
-      </div>
     </aside>
   );
 }
@@ -676,18 +649,19 @@ interface NotificationItem {
 
 function Header({
   title,
-  onMenuClick,
-  sidebarCollapsed,
   onNav,
   showToast,
+  user,
+  onLogout,
 }: {
   title: string;
-  onMenuClick: () => void;
-  sidebarCollapsed?: boolean;
   onNav?: (p: Page, id?: number) => void;
   showToast?: (m: string, t?: "success" | "error") => void;
+  user?: Usuario | null;
+  onLogout?: () => void;
 }) {
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
   const [filter, setFilter] = useState<"all" | "unread">("all");
   const [notifications, setNotifications] = useState<NotificationItem[]>([
     {
@@ -802,14 +776,6 @@ function Header({
 
   return (
     <div className="h-12 bg-card border-b border-border flex items-center gap-3 px-4 shrink-0 relative z-30">
-      <button
-        onClick={onMenuClick}
-        title={sidebarCollapsed ? "Expandir barra lateral" : "Recolher barra lateral"}
-        className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition flex items-center justify-center"
-      >
-        {sidebarCollapsed ? <ChevronRight size={18} /> : <Menu size={18} />}
-      </button>
-
       <span className="flex-1 text-sm font-medium text-muted-foreground truncate">{title}</span>
 
       {/* NOTIFICATION BELL CONTAINER */}
@@ -817,11 +783,10 @@ function Header({
         <button
           onClick={() => setShowNotifications(!showNotifications)}
           title="Notificações do Sistema"
-          className={`relative p-1.5 rounded-lg transition flex items-center justify-center ${
-            showNotifications
+          className={`relative p-1.5 rounded-lg transition flex items-center justify-center ${showNotifications
               ? "bg-primary/10 text-primary"
               : "text-muted-foreground hover:text-foreground hover:bg-accent"
-          }`}
+            }`}
         >
           <Bell size={18} />
           {unreadCount > 0 && (
@@ -863,21 +828,19 @@ function Header({
               <div className="flex items-center px-4 py-2 border-b border-border/70 text-xs bg-card gap-2">
                 <button
                   onClick={() => setFilter("all")}
-                  className={`px-2.5 py-1 rounded-md font-medium transition ${
-                    filter === "all"
+                  className={`px-2.5 py-1 rounded-md font-medium transition ${filter === "all"
                       ? "bg-accent text-foreground shadow-xs font-semibold"
                       : "text-muted-foreground hover:text-foreground"
-                  }`}
+                    }`}
                 >
                   Todas ({notifications.length})
                 </button>
                 <button
                   onClick={() => setFilter("unread")}
-                  className={`px-2.5 py-1 rounded-md font-medium transition ${
-                    filter === "unread"
+                  className={`px-2.5 py-1 rounded-md font-medium transition ${filter === "unread"
                       ? "bg-accent text-foreground shadow-xs font-semibold"
                       : "text-muted-foreground hover:text-foreground"
-                  }`}
+                    }`}
                 >
                   Não lidas ({unreadCount})
                 </button>
@@ -895,9 +858,8 @@ function Header({
                     <div
                       key={n.id}
                       onClick={() => handleClickItem(n)}
-                      className={`p-3.5 flex items-start gap-3 hover:bg-accent/50 transition cursor-pointer group relative ${
-                        n.unread ? "bg-primary/5" : ""
-                      }`}
+                      className={`p-3.5 flex items-start gap-3 hover:bg-accent/50 transition cursor-pointer group relative ${n.unread ? "bg-primary/5" : ""
+                        }`}
                     >
                       {getTypeIcon(n.type)}
                       <div className="flex-1 min-w-0 pr-4">
@@ -938,6 +900,86 @@ function Header({
                   </button>
                 </div>
               )}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="h-5 w-px bg-border my-auto mx-0.5" />
+
+      {/* USER PROFILE & SETTINGS MENU */}
+      <div className="relative">
+        <button
+          onClick={() => {
+            setShowUserMenu(!showUserMenu);
+            setShowNotifications(false);
+          }}
+          title="Perfil e Configurações da Conta"
+          className={`flex items-center gap-2 p-1 pl-1.5 pr-2 rounded-lg border transition ${showUserMenu
+              ? "bg-accent border-border"
+              : "border-transparent hover:bg-accent hover:border-border"
+            }`}
+        >
+          <div className="w-7 h-7 rounded-full bg-primary/15 text-primary border border-primary/20 flex items-center justify-center font-semibold text-xs shrink-0">
+            {user?.nome ? user.nome.charAt(0).toUpperCase() : <User size={13} />}
+          </div>
+          <div className="hidden md:flex flex-col text-left leading-tight">
+            <span className="text-xs font-medium text-foreground truncate max-w-[120px]">
+              {user?.nome || "Usuário"}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              {user?.perfil || ""}
+            </span>
+          </div>
+          <ChevronDown size={14} className="text-muted-foreground" />
+        </button>
+
+        {/* PROFILE & SETTINGS DROPDOWN */}
+        {showUserMenu && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
+            <div className="absolute right-0 mt-2 w-64 bg-card border border-border rounded-xl shadow-2xl z-50 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+              {/* User Header */}
+              <div className="p-3.5 border-b border-border bg-muted/30">
+                <p className="text-xs font-semibold text-foreground truncate">{user?.nome}</p>
+                <p className="text-[11px] text-muted-foreground truncate">{user?.email}</p>
+                <div className="mt-2 flex items-center gap-1.5">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary/10 text-primary border border-primary/20">
+                    {user?.perfil}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                    {user?.situacao}
+                  </span>
+                </div>
+              </div>
+
+              {/* Navigation Options */}
+              <div className="p-1.5 space-y-0.5 text-xs">
+                <button
+                  onClick={() => {
+                    setShowUserMenu(false);
+                    if (onNav) onNav("perfil");
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-foreground hover:bg-accent transition text-left font-medium"
+                >
+                  <User size={15} className="text-primary" />
+                  <span>Configurações</span>
+                </button>
+              </div>
+
+              {/* Logout Option */}
+              <div className="p-1.5 border-t border-border bg-muted/10">
+                <button
+                  onClick={() => {
+                    setShowUserMenu(false);
+                    if (onLogout) onLogout();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-red-600 hover:bg-red-50 hover:dark:bg-red-950/30 transition text-left font-medium text-xs"
+                >
+                  <LogOut size={15} className="text-red-500" />
+                  <span>Sair do Sistema</span>
+                </button>
+              </div>
             </div>
           </>
         )}
@@ -7295,13 +7337,12 @@ function PerfilPage({
               {pwdFormData.novaSenha && (
                 <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
                   <div
-                    className={`h-full transition-all duration-300 ${
-                      pwdStrength.percent <= 25
+                    className={`h-full transition-all duration-300 ${pwdStrength.percent <= 25
                         ? "bg-red-500"
                         : pwdStrength.percent <= 65
-                        ? "bg-amber-500"
-                        : "bg-emerald-500"
-                    }`}
+                          ? "bg-amber-500"
+                          : "bg-emerald-500"
+                      }`}
                     style={{ width: `${pwdStrength.percent}%` }}
                   />
                 </div>
@@ -7514,17 +7555,15 @@ export default function App() {
         onNav={navigate}
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((c) => !c)}
-        onLogout={handleLogout}
-        userName={currentUser.nome}
       />
 
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         <Header
           title={pageTitle[page]}
-          onMenuClick={() => setSidebarCollapsed((c) => !c)}
-          sidebarCollapsed={sidebarCollapsed}
           onNav={navigate}
           showToast={showToast}
+          user={currentUser}
+          onLogout={handleLogout}
         />
 
         <main className="flex-1 overflow-y-auto p-5">
